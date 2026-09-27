@@ -109,9 +109,17 @@ npm install
 
 ### 2. Configure environment
 
+Two templates, two scopes - create both:
+
 ```bash
-cp .env.example .env
+cp .env.example .env                    # root: infrastructure + compose ports
+cp apps/api/.env.example apps/api/.env  # API runtime variables
 ```
+
+The compose files interpolate the **root** `.env` (Compose loads it
+automatically); the per-app files are read by each app at runtime. The full-stack
+compose file treats the per-app files as _optional_ overrides, so the stack still
+boots when they are missing.
 
 | Variable                 | Description                                           | Default / Example                                         |
 | ------------------------ | ----------------------------------------------------- | --------------------------------------------------------- |
@@ -123,12 +131,23 @@ cp .env.example .env
 | `STELLAR_NETWORK_PASSPHRASE` | Passphrase matching the network (optional — falls back to the well-known passphrase) | `"Test SDF Network ; September 2015"` |
 | `JWT_SECRET`             | JWT signing secret (required; ≥32 chars in production) | Generate with `openssl rand -hex 32`                      |
 | `ENCRYPTION_SECRET`      | Master secret for per-user key derivation (required in production) | Generate with `openssl rand -base64 48`        |
-| `DEPLOYER_SECRET_KEY`    | Funded key required to boot — `ContractsService` reads it with `getOrThrow` at startup | (Required for Contracts module)   |
+| `DEPLOYER_SECRET_KEY`    | Stellar secret key required to boot — `ContractsService` reads it with `getOrThrow` and parses it with `Keypair.fromSecret` during construction; a throwaway testnet key is enough | (Required)                        |
 | `RESEND_FROM_EMAIL`      | `From` address for all transactional email            | `SaviTools <noreply@savitools.dev>`                       |
 | `WEB_ORIGIN`             | Allowed origin for API and WebSocket CORS             | `http://localhost:3000`                                   |
 | `THROTTLE_TTL`           | Rate limiting sliding window size in milliseconds     | `60000` (1 minute)                                        |
 | `THROTTLE_LIMIT`         | Max requests allowed in the rate limit window         | `100`                                                     |
 | `NEXT_PUBLIC_API_URL`    | Frontend → API URL                                    | `http://localhost:3001/api`                               |
+
+**`DEPLOYER_SECRET_KEY` is required to boot the API.** `ContractsService`
+reads it with `getOrThrow` and parses it with `Keypair.fromSecret` while the
+module is being constructed, so the API cannot start without a syntactically
+valid Stellar secret key (56 characters, starting with `S`). A throwaway,
+unfunded **testnet** key is enough to start the stack - funding it is only
+necessary if you actually deploy a contract. Generate one after `npm install`:
+
+```bash
+node -p "require('@stellar/stellar-sdk').Keypair.random().secret()"
+```
 
 The full list of runtime-read variables lives in `apps/api/.env.example`. On
 startup, `apps/api/src/config/env-validation.ts` validates the configuration
@@ -204,8 +223,30 @@ against the contract above. If you still receive either legacy header:
 ### 3. Start infrastructure
 
 ```bash
-docker compose up -d     # Postgres + Redis
+docker compose up -d     # Postgres + Redis (docker-compose.yml)
 ```
+
+Postgres and Redis are published on **loopback only** (`127.0.0.1`); change
+`POSTGRES_PORT` / `REDIS_PORT` in the root `.env` if either port is taken.
+
+#### Two compose files
+
+- `docker-compose.yml` - Postgres + Redis only. Start it with
+  `docker compose up -d` (this step) or `make infra`.
+- `docker-compose.dev.yml` - Postgres + Redis **plus** the `api` and `web`
+  containers. Start it with `make dev`.
+
+Use the second one when you want the whole stack in Docker instead of running
+the apps on the host in step 4:
+
+```bash
+make dev                                            # full stack in Docker
+docker compose -f docker-compose.dev.yml config -q   # validate without starting
+```
+
+It caches `node_modules` in named volumes, parameterises every published port,
+and starts `web` only once `api` reports healthy, so the first request no
+longer races the API's boot.
 
 ### 4. Run development servers
 
