@@ -22,6 +22,7 @@ import { CreateTransactionReplay1785700000000 } from './migrations/1785700000000
 import { CreateNetworkSamples1785786400000 } from './migrations/1785786400000-create-network-samples';
 import { CreatePasskeys1786200000000 } from './migrations/1786200000000-create-passkeys';
 import { AddSecretEncryptionVersioning1786300000000 } from './migrations/1786300000000-add-secret-encryption-versioning';
+import { WorkspaceDefaultUniqueIndex1786400000000 } from './migrations/1786400000000-workspace-default-unique-index';
 
 export default new DataSource({
   type: 'postgres',
@@ -51,6 +52,7 @@ export default new DataSource({
     CreateNetworkSamples1785786400000,
     CreatePasskeys1786200000000,
     AddSecretEncryptionVersioning1786300000000,
+    WorkspaceDefaultUniqueIndex1786400000000,
   ],
   synchronize: false,
 });
