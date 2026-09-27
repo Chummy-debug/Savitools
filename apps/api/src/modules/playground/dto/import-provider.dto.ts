@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsString, IsObject } from 'class-validator';
+import { IsEnum, IsString, IsObject, MinLength } from 'class-validator';
 import { ApiKeyProvider } from '../entities/api-key.entity';
 
 export class ImportProviderDto {

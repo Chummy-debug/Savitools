@@ -4,7 +4,10 @@ import { HttpStatus } from '@nestjs/common';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 import { MonitorController } from './monitor.controller';
+import { MonitorLeaderService } from './monitor-leader.service';
+import { MonitorRuntimeConfig } from './monitor-runtime.config';
 import { MonitorService } from './monitor.service';
+import { StreamManager } from './stream-manager.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SearchEventsQueryDto } from './dto/search-events.dto';
 import { ExportEventsQueryDto } from './dto/export-events.dto';
@@ -34,6 +37,20 @@ describe('MonitorController SSE and Metrics', () => {
     }),
   };
 
+  const mockLeaderService = {
+    isLeader: jest.fn().mockReturnValue(true),
+  };
+
+  const mockStreamManager = {
+    stats: jest.fn().mockReturnValue({
+      maxSseConnections: 2,
+      horizonSseConnections: 0,
+      streamGroups: 0,
+      sseGroups: 0,
+      pollingGroups: 0,
+    }),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
     const module: TestingModule = await Test.createTestingModule({
@@ -41,6 +58,9 @@ describe('MonitorController SSE and Metrics', () => {
       providers: [
         { provide: MonitorService, useValue: mockMonitorService },
         { provide: ConfigService, useValue: mockConfigService },
+        MonitorRuntimeConfig,
+        { provide: MonitorLeaderService, useValue: mockLeaderService },
+        { provide: StreamManager, useValue: mockStreamManager },
       ],
     })
       .overrideGuard(JwtAuthGuard)
@@ -53,10 +73,14 @@ describe('MonitorController SSE and Metrics', () => {
 
   it('exposes metrics via /metrics endpoint', () => {
     const metrics = controller.getMetrics();
-    expect(metrics).toEqual({
+    expect(metrics).toMatchObject({
+      role: 'all',
+      isProducerLeader: true,
       activeSseConnections: 0,
       maxSseConnections: 2,
     });
+    expect(metrics.heapUsedMb).toBeGreaterThan(0);
+    expect(metrics.rssMb).toBeGreaterThan(0);
   });
 
   it('returns 503 when SSE connections exceed the configured MAX_SSE_CONNECTIONS limit', async () => {
@@ -162,6 +186,23 @@ describe('MonitorController search & CSV export (Savitura/Savitools#195)', () =>
       providers: [
         { provide: MonitorService, useValue: mockMonitorService },
         { provide: ConfigService, useValue: mockConfigService },
+        MonitorRuntimeConfig,
+        {
+          provide: MonitorLeaderService,
+          useValue: { isLeader: () => true },
+        },
+        {
+          provide: StreamManager,
+          useValue: {
+            stats: () => ({
+              maxSseConnections: 50,
+              horizonSseConnections: 0,
+              streamGroups: 0,
+              sseGroups: 0,
+              pollingGroups: 0,
+            }),
+          },
+        },
       ],
     })
       .overrideGuard(JwtAuthGuard)

@@ -500,7 +500,10 @@ export class AssetControlService {
 
     const xdr = await this.assembleXdr(
       issuerAccount,
-      Operation.setOptions({ setFlags, clearFlags }),
+      Operation.setOptions({
+        setFlags: setFlags as any,
+        clearFlags: clearFlags as any,
+      }),
     );
 
     return {

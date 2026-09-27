@@ -24,10 +24,21 @@ import {
   NotificationJobData,
 } from './monitor.types';
 import { MonitorGateway } from './monitor.gateway';
+import { MonitorRuntimeConfig } from './monitor-runtime.config';
 import { EncryptionService, ENCRYPTION_PURPOSES } from '../../common/encryption.service';
 
 const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 
+/**
+ * Consumer half of the alert pipeline.
+ *
+ * BullMQ hands each job to exactly one worker, so running the consumer in every
+ * replica is safe and is what keeps delivery throughput scaling with the
+ * deployment — provided the *producer* runs once, which is what
+ * {@link MonitorLeaderService} and `MonitorQueueService` guarantee
+ * (Savitura/Savitools#255). `MONITOR_ROLE=api` disables the consumer entirely
+ * for deployments that run a dedicated monitor worker.
+ */
 @Injectable()
 export class NotificationWorkerService
   implements OnModuleInit, OnModuleDestroy
@@ -37,6 +48,7 @@ export class NotificationWorkerService
   private resend?: Resend;
 
   constructor(
+    private readonly runtime: MonitorRuntimeConfig,
     private readonly configService: ConfigService,
     @InjectRepository(AlertEvent)
     private readonly alertEventRepository: Repository<AlertEvent>,
@@ -49,6 +61,13 @@ export class NotificationWorkerService
   ) {}
 
   onModuleInit(): void {
+    if (!this.runtime.consumerEnabled) {
+      this.logger.log(
+        `Monitor role "${this.runtime.role}": notification worker is disabled on this instance`,
+      );
+      return;
+    }
+
     const redisUrl = this.configService.get<string>('REDIS_URL');
     if (!redisUrl) {
       return;

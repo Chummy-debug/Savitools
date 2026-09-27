@@ -23,7 +23,15 @@ import { TransactionModule } from "./modules/transaction/transaction.module";
 import { FederationModule } from "./modules/federation/federation.module";
 import { MetricsModule } from "./modules/metrics/metrics.module";
 import { DataSource } from "typeorm";
-import { ALL_ENTITIES, ALL_MIGRATIONS } from "./database/database.registry";
+import { CreatePlaygroundHistory1784642239000 } from "./database/migrations/1784642239000-create-playground-history";
+import { CreateLedgerMonitor1752926400000 } from "./database/migrations/1752926400000-create-ledger-monitor";
+import { AddMonitorStateAlerts1785312000000 } from "./database/migrations/1785312000000-add-monitor-state-alerts";
+import { AddAuthEnhancements1785398400000 } from "./database/migrations/1785398400000-add-auth-enhancements";
+import { CreateGraphSnapshots1785600000000 } from "./database/migrations/1785600000000-create-graph-snapshots";
+import { CreateNetworkSamples1785786400000 } from "./database/migrations/1785786400000-create-network-samples";
+import { AddPasswordReset1786100000000 } from "./database/migrations/1786100000000-add-password-reset";
+import { AddSecretEncryptionVersioning1786300000000 } from "./database/migrations/1786300000000-add-secret-encryption-versioning";
+import { WorkspaceDefaultUniqueIndex1786400000000 } from "./database/migrations/1786400000000-workspace-default-unique-index";
 import { validateEnvironment } from "./config/env-validation";
 import { CommonModule } from "./common/common.module";
 
@@ -52,7 +60,17 @@ ThrottlerModule.forRootAsync({
         url: config.get<string>("DATABASE_URL"),
         entities: ALL_ENTITIES,
         synchronize: config.get<string>("NODE_ENV") !== "production",
-        migrations: ALL_MIGRATIONS,
+        migrations: [
+          CreateLedgerMonitor1752926400000,
+          CreatePlaygroundHistory1784642239000,
+          AddMonitorStateAlerts1785312000000,
+          AddAuthEnhancements1785398400000,
+          CreateGraphSnapshots1785600000000,
+          CreateNetworkSamples1785786400000,
+          AddPasswordReset1786100000000,
+          AddSecretEncryptionVersioning1786300000000,
+          WorkspaceDefaultUniqueIndex1786400000000,
+        ],
         migrationsRun: config.get<string>("RUN_MIGRATIONS") === "true",
         logging: config.get<string>("NODE_ENV") === "development",
       }),

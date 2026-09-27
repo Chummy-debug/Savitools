@@ -51,7 +51,7 @@ export class ApiKey {
   @Column({ name: 'key_version', default: 1 })
   keyVersion!: number;
 
-  @Column({ name: 'provider_origin', nullable: true })
+  @Column({ name: 'provider_origin', type: 'varchar', nullable: true })
   providerOrigin!: string | null;
 
   @Column({ type: 'jsonb', nullable: true })

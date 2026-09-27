@@ -503,12 +503,110 @@ describe('FederationService', () => {
         expect(sep.supported).toBe(false);
         expect(sep.probeStatus).toBe('red');
       }
+      expect(result.tomlStatus).toBe('unavailable');
+    });
+
+    it('flags malformed TOML instead of treating it as an empty configuration', async () => {
+      mockFetch({
+        'malformed.com/.well-known/stellar.toml': {
+          ok: true,
+          text: 'TRANSFER_SERVER = [unclosed',
+        },
+      });
+
+      const result = await service.getSepSupport('malformed.com');
+
+      expect(result.tomlStatus).toBe('malformed');
+      expect(result.seps.every((sep) => sep.probeStatus === 'red')).toBe(true);
+    });
+
+    it('starts independent SEP probes concurrently', async () => {
+      const starts: string[] = [];
+      let releaseInfo!: () => void;
+      let releaseWebAuth!: () => void;
+      const info = new Promise<Response>((resolve) => { releaseInfo = () => resolve({ ok: true } as Response); });
+      const webAuth = new Promise<Response>((resolve) => { releaseWebAuth = () => resolve({ ok: true } as Response); });
+      global.fetch = jest.fn().mockImplementation((input: string | URL | Request) => {
+        const url = input.toString();
+        if (url.includes('stellar.toml')) {
+          return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve('ACCOUNTS=[]\nTRANSFER_SERVER="https://anchor.com/api"\nWEB_AUTH_ENDPOINT="https://anchor.com/auth"') });
+        }
+        if (url.endsWith('/info')) {
+          starts.push('info');
+          return info;
+        }
+        starts.push('web_auth');
+        return webAuth;
+      });
+
+      const request = service.getSepSupport('concurrent.com');
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(starts).toEqual(expect.arrayContaining(['info', 'web_auth']));
+      releaseInfo();
+      releaseWebAuth();
+      await expect(request).resolves.toMatchObject({ tomlStatus: 'available' });
+    });
+
+    it('marks an individual probe as timed out while preserving other results', async () => {
+      jest.useFakeTimers();
+      const timeoutService = new FederationService({
+        get: (key: string) =>
+          key === 'FEDERATION_PROBE_TIMEOUT_MS'
+            ? 10
+            : key === 'FEDERATION_REQUEST_TIMEOUT_MS'
+              ? 100
+              : undefined,
+      } as never);
+      global.fetch = jest.fn().mockImplementation((input: string | URL | Request) => {
+        const url = input.toString();
+        if (url.includes('stellar.toml')) {
+          return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve('ACCOUNTS=[]\nTRANSFER_SERVER="https://anchor.com/api"\nWEB_AUTH_ENDPOINT="https://anchor.com/auth"') });
+        }
+        if (url.endsWith('/info')) return new Promise(() => undefined);
+        return Promise.resolve({ ok: true, status: 200 });
+      });
+
+      const request = timeoutService.getSepSupport('probe-timeout.com');
+      await jest.advanceTimersByTimeAsync(0);
+      jest.advanceTimersByTime(10);
+      const result = await request;
+      jest.useRealTimers();
+
+      expect(result.seps.find((sep) => sep.number === 6)?.probeStatus).toBe('timeout');
+      expect(result.seps.find((sep) => sep.number === 10)?.probeStatus).toBe('green');
     });
 
     it('throws BadRequestException for invalid domain', async () => {
       await expect(service.getSepSupport('not valid!!!')).rejects.toThrow(
         BadRequestException,
       );
+    });
+  });
+
+  describe('stellar.toml cache', () => {
+    it('reuses a normalized-domain cache hit', async () => {
+      mockFetch({
+        'cache.com/.well-known/stellar.toml': { ok: true, text: 'ACCOUNTS=[]' },
+      });
+
+      await service.getToml('CACHE.COM.');
+      await service.getToml('cache.com');
+
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('coalesces concurrent cache misses for the same domain', async () => {
+      let release!: () => void;
+      const response = new Promise<Response>((resolve) => {
+        release = () => resolve({ ok: true, status: 200, text: () => Promise.resolve('ACCOUNTS=[]') } as Response);
+      });
+      global.fetch = jest.fn().mockReturnValue(response);
+
+      const requests = [service.getToml('flight.com'), service.getToml('FLIGHT.COM'), service.getToml('flight.com.')];
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+      release();
+      await expect(Promise.all(requests)).resolves.toHaveLength(3);
     });
   });
 
