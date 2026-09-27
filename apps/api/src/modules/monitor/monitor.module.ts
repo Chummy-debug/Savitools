@@ -14,6 +14,11 @@ import { AlertEvaluator } from './alert-evaluator.service';
 import { MonitorQueueService } from './monitor-queue.service';
 import { NotificationWorkerService } from './notification-worker.service';
 import { StateEvaluationService } from './state-evaluation.service';
+import { MonitorRuntimeConfig } from './monitor-runtime.config';
+import {
+  MonitorLeaderService,
+  monitorLockStoreProvider,
+} from './monitor-leader.service';
 import { AuthModule } from '../auth/auth.module';
 import { User } from '../auth/entities/user.entity';
 
@@ -39,6 +44,12 @@ import { User } from '../auth/entities/user.entity';
     MonitorQueueService,
     NotificationWorkerService,
     StateEvaluationService,
+    // One active producer per cluster (Savitura/Savitools#255): the runtime
+    // config resolves MONITOR_ROLE/MAX_SSE_CONNECTIONS once at startup and the
+    // leader service owns the Redis lease every producer path checks.
+    MonitorRuntimeConfig,
+    monitorLockStoreProvider,
+    MonitorLeaderService,
   ],
   exports: [MonitorService],
 })

@@ -10,6 +10,7 @@ import { AlertEvent } from "./entities/alert-event.entity";
 import { MonitorWebhook } from "./entities/monitor-webhook.entity";
 import { Watch } from "./entities/watch.entity";
 import { MonitorGateway } from "./monitor.gateway";
+import { MonitorRuntimeConfig } from "./monitor-runtime.config";
 import { NotificationWorkerService } from "./notification-worker.service";
 
 /** Same known answer as the Webhook Tester and contract replay specs. */
@@ -289,7 +290,9 @@ function createWorker(
     }),
     decryptForUser: jest.fn(),
   };
+  const runtime = new MonitorRuntimeConfig(config);
   return new NotificationWorkerService(
+    runtime,
     config,
     {} as Repository<AlertEvent>,
     webhookRepository,

@@ -117,6 +117,44 @@ describe('environment configuration validation (Savitura/Savitools#197)', () => 
     expect(errors).not.toContain('WEB_ORIGIN must use HTTPS in production');
   });
 
+  it('validates each origin when WEB_ORIGIN is a comma-separated list', () => {
+    const validMulti = {
+      ...validBaseConfig(),
+      NODE_ENV: 'production',
+      WEB_ORIGIN: 'https://app.savitools.dev, https://staging.savitools.dev',
+    };
+    expect(collectConfigurationErrors(validMulti).errors).not.toContain(
+      'Every WEB_ORIGIN entry must use HTTPS in production',
+    );
+
+    const mixedMulti = {
+      ...validBaseConfig(),
+      NODE_ENV: 'production',
+      WEB_ORIGIN: 'https://app.savitools.dev, http://insecure.savitools.dev',
+    };
+    expect(collectConfigurationErrors(mixedMulti).errors).toContain(
+      'WEB_ORIGIN must use HTTPS in production',
+    );
+  });
+
+  it('validates MONITOR_ROLE allowed values', () => {
+    const validRole = {
+      ...validBaseConfig(),
+      MONITOR_ROLE: 'worker',
+    };
+    expect(collectConfigurationErrors(validRole).errors).not.toContain(
+      'MONITOR_ROLE must be one of all, api, worker (received "worker")',
+    );
+
+    const invalidRole = {
+      ...validBaseConfig(),
+      MONITOR_ROLE: 'supervisor',
+    };
+    expect(collectConfigurationErrors(invalidRole).errors).toContain(
+      'MONITOR_ROLE must be one of all, api, worker (received "supervisor")',
+    );
+  });
+
   it('enforces minimum secret lengths in production', () => {
     const config = {
       ...validBaseConfig(),

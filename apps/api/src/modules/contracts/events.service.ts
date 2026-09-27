@@ -91,7 +91,10 @@ export class EventsService {
       );
     }
 
-    const server = this.server(dto.network);
+    // One resolved network drives both the RPC client and the metric label, so
+    // the recorded `network` can never disagree with the node that was queried.
+    const network: EventQueryNetwork = dto.network ?? "testnet";
+    const server = this.server(network);
     const request: rpc.Server.GetEventsRequest = {
       filters: [
         { type: dto.type ?? "contract", contractIds: [dto.contractId] },
@@ -105,14 +108,14 @@ export class EventsService {
       request.startLedger = dto.startLedger;
     } else {
       // Neither anchor given: start from the newest ledger the node holds.
-      request.startLedger = await this.latestLedger(server);
+      request.startLedger = await this.latestLedger(server, network);
     }
 
     if (dto.endLedger !== undefined) {
       request.endLedger = dto.endLedger;
     }
 
-    const response = await this.fetchEvents(server, request);
+    const response = await this.fetchEvents(server, request, network);
     const events = response.events.map((record) => this.decodeEvent(record));
 
     return {
@@ -123,9 +126,12 @@ export class EventsService {
     };
   }
 
-  private async latestLedger(server: rpc.Server): Promise<number> {
+  private async latestLedger(
+    server: rpc.Server,
+    network: EventQueryNetwork,
+  ): Promise<number> {
     try {
-      const result = await this.timeRpc("get_latest_ledger", () =>
+      const result = await this.timeRpc("get_latest_ledger", network, () =>
         server.getLatestLedger(),
       );
       return result.sequence;
@@ -137,9 +143,12 @@ export class EventsService {
   private async fetchEvents(
     server: rpc.Server,
     request: rpc.Server.GetEventsRequest,
+    network: EventQueryNetwork,
   ): Promise<rpc.Api.GetEventsResponse> {
     try {
-      return await this.timeRpc("get_events", () => server.getEvents(request));
+      return await this.timeRpc("get_events", network, () =>
+        server.getEvents(request),
+      );
     } catch (err) {
       throw this.upstreamError(
         err,
@@ -148,9 +157,13 @@ export class EventsService {
     }
   }
 
-  private timeRpc<T>(operation: string, fn: () => Promise<T>): Promise<T> {
+  private timeRpc<T>(
+    operation: string,
+    network: EventQueryNetwork,
+    fn: () => Promise<T>,
+  ): Promise<T> {
     return this.metricsService
-      ? this.metricsService.timeSorobanRpc(operation, "events", fn)
+      ? this.metricsService.timeSorobanRpc(operation, network, fn)
       : fn();
   }
 

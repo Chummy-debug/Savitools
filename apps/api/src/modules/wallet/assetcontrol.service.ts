@@ -502,8 +502,8 @@ export class AssetControlService {
     const xdr = await this.assembleXdr(
       issuerAccount,
       Operation.setOptions({
-        setFlags: setFlags as AuthFlag,
-        clearFlags: clearFlags as AuthFlag,
+        setFlags: setFlags as any,
+        clearFlags: clearFlags as any,
       }),
     );
 

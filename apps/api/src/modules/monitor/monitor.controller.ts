@@ -12,8 +12,8 @@ import {
   UseGuards,
   BadRequestException,
   NotFoundException,
-  ServiceUnavailableException,
   Logger,
+  OnModuleDestroy,
 } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { MonitorService } from './monitor.service';
@@ -24,41 +24,59 @@ import { SearchEventsQueryDto } from './dto/search-events.dto';
 import { ExportEventsQueryDto } from './dto/export-events.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser, AuthUser } from '../auth/decorators/current-user.decorator';
-import { ConfigService } from '@nestjs/config';
+import { MonitorLeaderService } from './monitor-leader.service';
+import { MonitorRuntimeConfig } from './monitor-runtime.config';
+import { StreamManager } from './stream-manager.service';
+
+interface SseClient {
+  reply: FastifyReply;
+  lastActivity: number;
+  timer?: NodeJS.Timeout;
+  pingTimer?: NodeJS.Timeout;
+}
+
+/** Idle clients are dropped after this long without activity. */
+const SSE_IDLE_TIMEOUT_MS = 60_000;
+const SSE_CLEANUP_INTERVAL_MS = 15_000;
+const SSE_PING_INTERVAL_MS = 30_000;
 
 @Controller('monitor')
-export class MonitorController {
+export class MonitorController implements OnModuleDestroy {
   private readonly logger = new Logger(MonitorController.name);
   private activeSseConnections = 0;
-  private readonly clientConnections = new Set<{
-    reply: FastifyReply;
-    lastActivity: number;
-    timer?: NodeJS.Timeout;
-    pingTimer?: NodeJS.Timeout;
-  }>();
-  private cleanupInterval?: NodeJS.Timeout;
+  private readonly clientConnections = new Set<SseClient>();
+  private readonly cleanupInterval: NodeJS.Timeout;
 
   constructor(
     private readonly monitorService: MonitorService,
-    private readonly configService: ConfigService,
+    private readonly runtime: MonitorRuntimeConfig,
+    private readonly leader: MonitorLeaderService,
+    private readonly streamManager: StreamManager,
   ) {
-    const idleTimeoutMs = 60_000;
     this.cleanupInterval = setInterval(() => {
-      const now = Date.now();
-      for (const client of this.clientConnections) {
-        if (now - client.lastActivity > idleTimeoutMs) {
-          this.terminateConnection(client, HttpStatus.REQUEST_TIMEOUT);
-        }
-      }
-    }, 15_000);
+      this.disconnectIdleClients();
+    }, SSE_CLEANUP_INTERVAL_MS);
+    // Served connections keep the process up; the reaper must not.
+    this.cleanupInterval.unref?.();
   }
 
-  private terminateConnection(client: {
-    reply: FastifyReply;
-    lastActivity: number;
-    timer?: NodeJS.Timeout;
-    pingTimer?: NodeJS.Timeout;
-  }, code?: number) {
+  onModuleDestroy(): void {
+    clearInterval(this.cleanupInterval);
+    for (const client of Array.from(this.clientConnections)) {
+      this.terminateConnection(client);
+    }
+  }
+
+  private disconnectIdleClients(): void {
+    const now = Date.now();
+    for (const client of Array.from(this.clientConnections)) {
+      if (now - client.lastActivity > SSE_IDLE_TIMEOUT_MS) {
+        this.terminateConnection(client, HttpStatus.REQUEST_TIMEOUT);
+      }
+    }
+  }
+
+  private terminateConnection(client: SseClient, code?: number) {
     if (client.timer) clearInterval(client.timer);
     if (client.pingTimer) clearInterval(client.pingTimer);
     if (this.clientConnections.has(client)) {
@@ -77,11 +95,25 @@ export class MonitorController {
     }
   }
 
+  /**
+   * Liveness for the load-test harness (scripts/ledger-monitor-load-test.ts)
+   * and for verifying that exactly one replica is producing: the Horizon stream
+   * counters and `isProducerLeader` tell an operator whether this instance owns
+   * the streams, without reading logs.
+   */
   @Get('metrics')
   getMetrics() {
+    const memory = process.memoryUsage();
+    const round = (bytes: number) => Math.round((bytes / 1_048_576) * 100) / 100;
     return {
+      role: this.runtime.role,
+      isProducerLeader: this.leader.isLeader(),
       activeSseConnections: this.activeSseConnections,
-      maxSseConnections: this.getMaxSseConnections(),
+      maxSseConnections: this.runtime.maxSseConnections,
+      heapUsedMb: round(memory.heapUsed),
+      rssMb: round(memory.rss),
+      uptimeSeconds: Math.round(process.uptime()),
+      horizon: this.streamManager.stats(),
     };
   }
 
@@ -90,7 +122,9 @@ export class MonitorController {
     @Res() reply: FastifyReply,
     @Query('network') network?: string,
   ): Promise<void> {
-    const maxConns = this.getMaxSseConnections();
+    // Resolved once at startup (MonitorRuntimeConfig) so the cap can never
+    // silently differ from the configured value.
+    const maxConns = this.runtime.maxSseConnections;
     if (this.activeSseConnections >= maxConns) {
       reply.status(HttpStatus.SERVICE_UNAVAILABLE).send({
         statusCode: HttpStatus.SERVICE_UNAVAILABLE,
@@ -127,7 +161,9 @@ export class MonitorController {
         this.logger.error(`Failed to send heartbeat ping: ${err instanceof Error ? err.message : String(err)}`);
         this.terminateConnection(clientInfo);
       }
-    }, 30_000);
+    }, SSE_PING_INTERVAL_MS);
+    // The open socket keeps the process up; the heartbeat must not add to it.
+    clientInfo.pingTimer.unref?.();
 
     const cleanup = () => {
       this.terminateConnection(clientInfo);
@@ -136,17 +172,6 @@ export class MonitorController {
     reply.raw.on('close', cleanup);
     reply.raw.on('finish', cleanup);
     reply.raw.on('error', cleanup);
-  }
-
-  private getMaxSseConnections(): number {
-    const envVal = this.configService.get<string>('MAX_SSE_CONNECTIONS');
-    if (envVal) {
-      const parsed = parseInt(envVal, 10);
-      if (!isNaN(parsed)) {
-        return parsed;
-      }
-    }
-    return 1000;
   }
 
   @Post('watches')

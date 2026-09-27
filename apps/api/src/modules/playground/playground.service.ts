@@ -113,6 +113,9 @@ export class PlaygroundService {
         );
       }
       baseUrl = this.getProviderBaseUrl(dto.provider, { providerOrigin: key.providerOrigin });
+      if (!baseUrl) {
+        throw new BadRequestException(`${dto.provider} provider origin is not configured`);
+      }
     } else {
       baseUrl = this.getProviderBaseUrl(dto.provider);
       if (!baseUrl) {
