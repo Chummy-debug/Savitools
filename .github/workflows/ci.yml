@@ -53,6 +53,52 @@ jobs:
       - run: npm ci
       - run: npx turbo test
 
+  web-coverage:
+    name: Web Tests & Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # `apps/web` owns its Jest toolchain, so this runs without the API
+      # workspace's devDependencies. The threshold in apps/web/jest.config.js
+      # gates the run.
+      - name: Run web tests with coverage
+        run: npm run test:coverage -w apps/web
+
+      - name: Report coverage in the job summary
+        if: always()
+        run: |
+          summary=apps/web/coverage/coverage-summary.json
+          if [ -f "$summary" ]; then
+            {
+              echo "### apps/web coverage"
+              echo
+              echo "| Metric | Coverage | Covered / Total |"
+              echo "| --- | --- | --- |"
+              jq -r '
+                .total
+                | to_entries[]
+                | select(.key | test("^(lines|statements|functions|branches)$"))
+                | "| \(.key) | \(.value.pct)% | \(.value.covered)/\(.value.total) |"
+              ' "$summary"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apps-web-coverage
+          path: apps/web/coverage
+          if-no-files-found: warn
+
   route-contract:
     name: Route Contract (API <-> Web)
     runs-on: ubuntu-latest
