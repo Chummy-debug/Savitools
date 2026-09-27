@@ -2,7 +2,10 @@ import { BadGatewayException, BadRequestException } from '@nestjs/common';
 import { lookup as dnsLookup } from 'dns/promises';
 import { isIP } from 'net';
 
-export const MAX_WEBHOOK_REDIRECTS = 5;
+/** Shared redirect limit for outbound requests protected by this SSRF guard. */
+export const MAX_SAFE_REDIRECTS = 5;
+/** @deprecated Use MAX_SAFE_REDIRECTS for non-webhook outbound requests. */
+export const MAX_WEBHOOK_REDIRECTS = MAX_SAFE_REDIRECTS;
 
 function ipv4ToInt(ip: string): number {
   return ip

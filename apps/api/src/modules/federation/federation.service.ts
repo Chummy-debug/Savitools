@@ -6,10 +6,15 @@ import {
   BadGatewayException,
   PayloadTooLargeException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import * as smolToml from 'smol-toml';
-import { assertPublicHostname, MAX_PROXY_REDIRECTS } from '../playground/ssrf-guard';
+import { assertPublicHostname, MAX_SAFE_REDIRECTS } from '../webhook/ssrf-guard';
 
 const FETCH_TIMEOUT = 15_000;
+export const DEFAULT_FEDERATION_PROBE_TIMEOUT_MS = 3_000;
+export const DEFAULT_FEDERATION_REQUEST_TIMEOUT_MS = 5_000;
+export const DEFAULT_FEDERATION_TOML_CACHE_TTL_MS = 5 * 60_000;
+export const DEFAULT_FEDERATION_TOML_CACHE_MAX_ENTRIES = 200;
 
 // ─── TOML input bounds (Savitura/Savitools#220) ──────────────────────────────
 /** Maximum stellar.toml response size accepted before parsing. */
@@ -35,6 +40,22 @@ function isDomain(input: string): boolean {
 
 function stripProtocol(domain: string): string {
   return domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+}
+
+function normalizeDomain(domain: string): string {
+  return stripProtocol(domain.trim()).replace(/\.$/, '').toLowerCase();
+}
+
+function positiveInteger(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+class RequestTimeoutError extends Error {
+  constructor() {
+    super('Request timed out');
+    this.name = 'RequestTimeoutError';
+  }
 }
 
 export interface FederationResolveResult {
@@ -105,11 +126,19 @@ export interface SepInfo {
   name: string;
   supported: boolean;
   endpoint: string | null;
-  probeStatus: 'green' | 'yellow' | 'red' | 'none';
+  probeStatus: 'green' | 'yellow' | 'red' | 'none' | 'timeout';
 }
 
 export interface SepResult {
   seps: SepInfo[];
+  /** Additive TOML state so an unavailable or malformed document is not hidden. */
+  tomlStatus?: 'available' | 'unavailable' | 'malformed';
+}
+
+interface CachedToml {
+  parsed: Record<string, unknown>;
+  fetchLatencyMs: number;
+  expiresAt: number;
 }
 
 // ─── Transfer request links (Savitura/Savitools#217) ────────────────────────
@@ -208,10 +237,43 @@ function parseBoundedToml(raw: string): Record<string, unknown> {
 @Injectable()
 export class FederationService {
   private readonly logger = new Logger(FederationService.name);
+  private readonly tomlCache = new Map<string, CachedToml>();
+  private readonly tomlInFlight = new Map<string, Promise<CachedToml>>();
+
+  constructor(private readonly configService?: ConfigService) {}
+
+  private get probeTimeoutMs(): number {
+    return positiveInteger(
+      this.configService?.get('FEDERATION_PROBE_TIMEOUT_MS'),
+      DEFAULT_FEDERATION_PROBE_TIMEOUT_MS,
+    );
+  }
+
+  private get requestTimeoutMs(): number {
+    return positiveInteger(
+      this.configService?.get('FEDERATION_REQUEST_TIMEOUT_MS'),
+      DEFAULT_FEDERATION_REQUEST_TIMEOUT_MS,
+    );
+  }
+
+  private get tomlCacheTtlMs(): number {
+    return positiveInteger(
+      this.configService?.get('FEDERATION_TOML_CACHE_TTL_MS'),
+      DEFAULT_FEDERATION_TOML_CACHE_TTL_MS,
+    );
+  }
+
+  private get tomlCacheMaxEntries(): number {
+    return positiveInteger(
+      this.configService?.get('FEDERATION_TOML_CACHE_MAX_ENTRIES'),
+      DEFAULT_FEDERATION_TOML_CACHE_MAX_ENTRIES,
+    );
+  }
 
   private async fetchWithTimeout(
     urlStr: string,
     timeout = FETCH_TIMEOUT,
+    parentSignal?: AbortSignal,
   ): Promise<Response> {
     let target = new URL(urlStr);
     
@@ -221,29 +283,58 @@ export class FederationService {
 
     await assertPublicHostname(target.hostname);
 
+    const controller = new AbortController();
+    let timedOut = false;
+    let rejectAbort!: (reason: Error) => void;
+    const abortPromise = new Promise<never>((_, reject) => {
+      rejectAbort = reject;
+    });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      rejectAbort(new RequestTimeoutError());
+    }, timeout);
+    const abortForParent = () => {
+      controller.abort();
+      rejectAbort(new RequestTimeoutError());
+    };
+    parentSignal?.addEventListener('abort', abortForParent, { once: true });
+    if (parentSignal?.aborted) abortForParent();
+
     const requestInit = {
-      signal: AbortSignal.timeout(timeout),
+      signal: controller.signal,
       headers: { Accept: '*/*' },
       redirect: 'manual' as const,
     };
+    try {
+      let response = await Promise.race([
+        fetch(target.toString(), requestInit),
+        abortPromise,
+      ]);
+      let hops = 0;
 
-    let response = await fetch(target.toString(), requestInit);
-    let hops = 0;
-
-    while ([301, 302, 303, 307, 308].includes(response.status) && response.headers.has('location')) {
-      if (++hops > MAX_PROXY_REDIRECTS) {
-        throw new BadGatewayException('Too many redirects');
+      while ([301, 302, 303, 307, 308].includes(response.status) && response.headers.has('location')) {
+        if (++hops > MAX_SAFE_REDIRECTS) {
+          throw new BadGatewayException('Too many redirects');
+        }
+        target = new URL(response.headers.get('location')!, target);
+        if (target.protocol !== 'https:' && target.protocol !== 'http:') {
+          throw new BadRequestException(`Unsupported protocol in redirect: ${target.protocol}`);
+        }
+        await assertPublicHostname(target.hostname);
+        response = await Promise.race([
+          fetch(target.toString(), requestInit),
+          abortPromise,
+        ]);
       }
-      target = new URL(response.headers.get('location')!, target);
-      if (target.protocol !== 'https:' && target.protocol !== 'http:') {
-        throw new BadRequestException(`Unsupported protocol in redirect: ${target.protocol}`);
-      }
-      await assertPublicHostname(target.hostname);
-
-      response = await fetch(target.toString(), requestInit);
+      return response;
+    } catch (error) {
+      if (timedOut || parentSignal?.aborted) throw new RequestTimeoutError();
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      parentSignal?.removeEventListener('abort', abortForParent);
     }
-
-    return response;
   }
 
   private extractHomeDomain(
@@ -252,6 +343,30 @@ export class FederationService {
     const domain = federationRecord.home_domain;
     if (typeof domain === 'string') return domain;
     return null;
+  }
+
+  private async awaitWithinDeadline<T>(
+    promise: Promise<T>,
+    signal: AbortSignal,
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = () => reject(new RequestTimeoutError());
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+      promise.then(
+        (value) => {
+          signal.removeEventListener('abort', onAbort);
+          resolve(value);
+        },
+        (error: unknown) => {
+          signal.removeEventListener('abort', onAbort);
+          reject(error);
+        },
+      );
+    });
   }
 
   // ─── GET /federation/resolve ────────────────────────────────────────────
@@ -355,47 +470,20 @@ export class FederationService {
   // ─── GET /federation/toml ───────────────────────────────────────────────
 
   async getToml(domain: string): Promise<TomlResult> {
-    const cleanDomain = stripProtocol(domain.trim());
+    const cleanDomain = normalizeDomain(domain);
     if (!isDomain(cleanDomain)) {
       throw new BadRequestException(`Invalid domain: ${domain}`);
     }
 
-    const start = Date.now();
-    let rawToml: string;
+    let toml: CachedToml;
     try {
-      const url = `https://${cleanDomain}/.well-known/stellar.toml`;
-      const res = await this.fetchWithTimeout(url);
-      if (!res.ok) {
-        throw new NotFoundException(
-          `stellar.toml not found at ${url} (HTTP ${res.status})`,
-        );
-      }
-      rawToml = await res.text();
+      toml = await this.fetchTomlRecord(cleanDomain);
     } catch (err: unknown) {
-      if (err instanceof NotFoundException) throw err;
+      if (err instanceof NotFoundException || err instanceof BadRequestException || err instanceof PayloadTooLargeException) throw err;
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      throw new BadRequestException(
-        `Failed to fetch stellar.toml for ${cleanDomain}: ${msg}`,
-      );
+      throw new BadRequestException(`Failed to fetch stellar.toml for ${cleanDomain}: ${msg}`);
     }
-
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = parseBoundedToml(rawToml);
-    } catch (err: unknown) {
-      if (
-        err instanceof BadRequestException ||
-        err instanceof PayloadTooLargeException
-      ) {
-        throw err;
-      }
-      const msg = err instanceof Error ? err.message : 'Unknown parse error';
-      throw new BadRequestException(
-        `Failed to parse stellar.toml for ${cleanDomain}: ${msg}`,
-      );
-    }
-
-    const latencyMs = Date.now() - start;
+    const parsed = toml.parsed;
 
     const validationWarnings: string[] = [];
     for (const field of REQUIRED_TOML_FIELDS) {
@@ -511,7 +599,7 @@ export class FederationService {
               : undefined,
           }
         : null,
-      fetchLatencyMs: latencyMs,
+      fetchLatencyMs: toml.fetchLatencyMs,
       validationWarnings,
     };
   }
@@ -519,15 +607,29 @@ export class FederationService {
   // ─── GET /federation/sep ────────────────────────────────────────────────
 
   async getSepSupport(domain: string): Promise<SepResult> {
-    const cleanDomain = stripProtocol(domain.trim());
+    const cleanDomain = normalizeDomain(domain);
     if (!isDomain(cleanDomain)) {
       throw new BadRequestException(`Invalid domain: ${domain}`);
     }
 
+    const deadlineController = new AbortController();
+    const deadlineTimer = setTimeout(
+      () => deadlineController.abort(),
+      this.requestTimeoutMs,
+    );
     let tomlData: Record<string, unknown>;
     try {
-      tomlData = await this.fetchToml(cleanDomain);
-    } catch {
+      // A request deadline must not cancel the shared TOML flight, because
+      // other callers may still be awaiting the same cache miss.
+      tomlData = await this.awaitWithinDeadline(
+        this.fetchToml(cleanDomain),
+        deadlineController.signal,
+      );
+    } catch (error) {
+      clearTimeout(deadlineTimer);
+      const malformed =
+        error instanceof BadRequestException &&
+        /Malformed TOML|TOML document/.test(error.message);
       return {
         seps: [
           {
@@ -566,110 +668,96 @@ export class FederationService {
             probeStatus: 'red',
           },
         ],
+        tomlStatus: malformed ? 'malformed' : 'unavailable',
       };
     }
 
-    const seps: SepInfo[] = [];
-
-    // SEP-1: stellar.toml is present
-    seps.push({
+    const sep1: SepInfo = {
       number: 1,
       name: 'stellar.toml',
       supported: true,
       endpoint: `https://${cleanDomain}/.well-known/stellar.toml`,
       probeStatus: 'green',
-    });
+    };
 
-    // SEP-6: TRANSFER_SERVER present
     const transferServer = tomlData.TRANSFER_SERVER as string | undefined;
-    if (transferServer) {
-      const probeStatus = await this.probeEndpoint(transferServer, '/info');
-      seps.push({
+    const sep6 = transferServer
+      ? this.probeEndpoint(transferServer, '/info', deadlineController.signal).then((probeStatus): SepInfo => ({
         number: 6,
         name: 'Anchor API',
         supported: true,
         endpoint: transferServer,
         probeStatus,
-      });
-    } else {
-      seps.push({
+      }))
+      : Promise.resolve<SepInfo>({
         number: 6,
         name: 'Anchor API',
         supported: false,
         endpoint: null,
         probeStatus: 'red',
       });
-    }
 
-    // SEP-10: WEB_AUTH_ENDPOINT present
     const webAuthEndpoint = tomlData.WEB_AUTH_ENDPOINT as string | undefined;
-    if (webAuthEndpoint) {
-      const probeStatus = await this.probeEndpoint(
-        webAuthEndpoint,
-        '/web_auth',
-      );
-      seps.push({
+    const sep10 = webAuthEndpoint
+      ? this.probeEndpoint(webAuthEndpoint, '/web_auth', deadlineController.signal).then((probeStatus): SepInfo => ({
         number: 10,
         name: 'Stellar Web Authentication',
         supported: true,
         endpoint: webAuthEndpoint,
         probeStatus,
-      });
-    } else {
-      seps.push({
+      }))
+      : Promise.resolve<SepInfo>({
         number: 10,
         name: 'Stellar Web Authentication',
         supported: false,
         endpoint: null,
         probeStatus: 'red',
       });
-    }
 
-    // SEP-24: TRANSFER_SERVER_SEP0024 present
     const transferServerSep0024 = tomlData.TRANSFER_SERVER_SEP0024 as
       | string
       | undefined;
-    if (transferServerSep0024) {
-      seps.push({
+    const sep24: SepInfo = transferServerSep0024
+      ? {
         number: 24,
         name: 'Interactive Anchor API',
         supported: true,
         endpoint: transferServerSep0024,
         probeStatus: 'green',
-      });
-    } else {
-      seps.push({
+      }
+      : {
         number: 24,
         name: 'Interactive Anchor API',
         supported: false,
         endpoint: null,
         probeStatus: 'red',
-      });
-    }
+      };
 
-    // SEP-31: DIRECT_PAYMENT_SERVER present
     const directPaymentServer = tomlData.DIRECT_PAYMENT_SERVER as
       | string
       | undefined;
-    if (directPaymentServer) {
-      seps.push({
+    const sep31: SepInfo = directPaymentServer
+      ? {
         number: 31,
         name: 'Direct Payments',
         supported: true,
         endpoint: directPaymentServer,
         probeStatus: 'green',
-      });
-    } else {
-      seps.push({
+      }
+      : {
         number: 31,
         name: 'Direct Payments',
         supported: false,
         endpoint: null,
         probeStatus: 'red',
-      });
-    }
+      };
 
-    return { seps };
+    try {
+      const [resolvedSep6, resolvedSep10] = await Promise.all([sep6, sep10]);
+      return { seps: [sep1, resolvedSep6, resolvedSep10, sep24, sep31], tomlStatus: 'available' };
+    } finally {
+      clearTimeout(deadlineTimer);
+    }
   }
 
   // ─── GET /federation/link-preview (Savitura/Savitools#217) ───────────────
@@ -682,7 +770,7 @@ export class FederationService {
     domain: string,
     params: TransferLinkParams,
   ): Promise<TransferLinkResult> {
-    const cleanDomain = stripProtocol(domain.trim());
+    const cleanDomain = normalizeDomain(domain);
     if (!isDomain(cleanDomain)) {
       throw new BadRequestException(`Invalid domain: ${domain}`);
     }
@@ -797,6 +885,34 @@ export class FederationService {
   private async fetchToml(
     domain: string,
   ): Promise<Record<string, unknown>> {
+    return (await this.fetchTomlRecord(domain)).parsed;
+  }
+
+  private async fetchTomlRecord(domain: string): Promise<CachedToml> {
+    const key = normalizeDomain(domain);
+    const cached = this.tomlCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      // Refresh insertion order so eviction remains least-recently-used.
+      this.tomlCache.delete(key);
+      this.tomlCache.set(key, cached);
+      return cached;
+    }
+    if (cached) this.tomlCache.delete(key);
+
+    const inFlight = this.tomlInFlight.get(key);
+    if (inFlight) return inFlight;
+
+    const request = this.fetchAndCacheToml(key);
+    this.tomlInFlight.set(key, request);
+    try {
+      return await request;
+    } finally {
+      this.tomlInFlight.delete(key);
+    }
+  }
+
+  private async fetchAndCacheToml(domain: string): Promise<CachedToml> {
+    const start = Date.now();
     const url = `https://${domain}/.well-known/stellar.toml`;
     const res = await this.fetchWithTimeout(url);
     if (!res.ok) {
@@ -805,18 +921,31 @@ export class FederationService {
       );
     }
     const raw = await res.text();
-    return parseBoundedToml(raw);
+    const cached: CachedToml = {
+      parsed: parseBoundedToml(raw),
+      fetchLatencyMs: Date.now() - start,
+      expiresAt: Date.now() + this.tomlCacheTtlMs,
+    };
+    this.tomlCache.set(domain, cached);
+    while (this.tomlCache.size > this.tomlCacheMaxEntries) {
+      const oldest = this.tomlCache.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.tomlCache.delete(oldest);
+    }
+    return cached;
   }
 
   private async probeEndpoint(
     baseUrl: string,
     path: string,
-  ): Promise<'green' | 'yellow'> {
+    signal?: AbortSignal,
+  ): Promise<'green' | 'yellow' | 'timeout'> {
     try {
       const url = `${baseUrl.replace(/\/$/, '')}${path}`;
-      const res = await this.fetchWithTimeout(url, 8000);
+      const res = await this.fetchWithTimeout(url, this.probeTimeoutMs, signal);
       return res.ok ? 'green' : 'yellow';
-    } catch {
+    } catch (error) {
+      if (error instanceof RequestTimeoutError || signal?.aborted) return 'timeout';
       return 'yellow';
     }
   }
