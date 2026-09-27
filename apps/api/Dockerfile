@@ -31,8 +31,8 @@ COPY --from=builder /app/apps/api/dist apps/api/dist
 COPY apps/api/src/modules/sdkgen/specs apps/api/dist/modules/sdkgen/specs
 COPY apps/api/docker-healthcheck.mjs docker-healthcheck.mjs
 
-RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 --ingroup nodejs nestjs
+RUN addgroup -g 1001 nodejs && \
+    adduser -u 1001 -G nodejs -s /bin/sh -D nestjs
 USER nestjs
 
 WORKDIR /app/apps/api
