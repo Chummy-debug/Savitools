@@ -200,8 +200,17 @@ export const OPERATION_MANIFEST = [
   },
 ];
 
+export interface SimulationResult {
+  success: boolean;
+  hash: string;
+  fee: string | null;
+  resultCodes: string | null;
+  operationResults: unknown | null;
+  ledger: number | null;
+}
+
 interface CachedSimulation {
-  result: any;
+  result: SimulationResult;
   expiresAt: number;
 }
 
@@ -267,7 +276,7 @@ export class ComposerService {
     return network === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
   }
 
-  private async loadSequenceNumber(
+  async loadSequenceNumber(
     sourceAccount: string,
     network: 'testnet' | 'mainnet',
   ): Promise<string> {
@@ -532,7 +541,18 @@ export class ComposerService {
         ledger: (response as { ledger?: number }).ledger ?? null,
       };
     } catch (err: unknown) {
-      const errObj = err as any;
+      const errObj = err as {
+        response?: {
+          data?: {
+            extras?: {
+              result_codes?: {
+                transaction?: string;
+                operations?: unknown[];
+              };
+            };
+          };
+        };
+      };
       const resultCodes =
         errObj?.response?.data?.extras?.result_codes || null;
       const operationResults = resultCodes?.operations || null;
@@ -594,8 +614,9 @@ export class ComposerService {
                 }
                 successCount++;
                 latencies.push(Date.now() - t0);
-              } catch (err: any) {
-                if (!err.message.includes('tx_bad_seq')) {
+              } catch (err: unknown) {
+                const message = err instanceof Error ? err.message : String(err);
+                if (!message.includes('tx_bad_seq')) {
                   failureCount++;
                 }
                 latencies.push(Date.now() - t0);
@@ -646,8 +667,9 @@ export class ComposerService {
         sequential: sequentialResult,
         concurrent: concurrentResult,
       };
-    } catch (error: any) {
-      throw new BadRequestException(`Benchmark failed: ${error.message}`);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(`Benchmark failed: ${message}`);
     }
   }
 
@@ -780,7 +802,9 @@ export class ComposerService {
           value: dto.value ? Buffer.from(dto.value) : null,
         });
       default:
-        throw new BadRequestException(`Unknown operation type: ${(dto as any).type}`);
+        throw new BadRequestException(
+          `Unknown operation type: ${(dto as { type?: string }).type}`,
+        );
     }
   }
 
@@ -844,7 +868,7 @@ export class ComposerService {
         }
         default:
           throw new BadRequestException(
-            `Unknown precondition type: ${(precondition as any).type}`,
+            `Unknown precondition type: ${(precondition as { type?: string }).type}`,
           );
       }
     }

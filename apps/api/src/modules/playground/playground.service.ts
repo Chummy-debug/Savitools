@@ -135,6 +135,10 @@ export class PlaygroundService {
       }
     }
 
+    if (!baseUrl) {
+      throw new BadRequestException(`${dto.provider} API URL is not configured`);
+    }
+
     const decryptedKey = await this.decryptAndUpgrade(userId, key!);
     return this.executeProxyRequest(userId, dto, decryptedKey, baseUrl);
   }

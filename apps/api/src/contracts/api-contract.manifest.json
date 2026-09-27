@@ -140,12 +140,12 @@
     {
       "method": "GET",
       "path": "/api/v1/composer/sequence",
-      "auth": "public"
+      "auth": "jwt"
     },
     {
       "method": "POST",
       "path": "/api/v1/composer/sequence/run",
-      "auth": "public"
+      "auth": "jwt"
     },
     {
       "method": "POST",
@@ -413,6 +413,26 @@
       "auth": "jwt"
     },
     {
+      "method": "GET",
+      "path": "/api/v1/playground/providers",
+      "auth": "jwt"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/playground/providers/:id",
+      "auth": "jwt"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/playground/providers/:id/rename",
+      "auth": "jwt"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/playground/providers/import",
+      "auth": "jwt"
+    },
+    {
       "method": "POST",
       "path": "/api/v1/playground/proxy",
       "auth": "jwt"
@@ -488,6 +508,11 @@
       "auth": "public"
     },
     {
+      "method": "POST",
+      "path": "/api/v1/simulator/pool/quote",
+      "auth": "public"
+    },
+    {
       "method": "GET",
       "path": "/api/v1/simulator/trades",
       "auth": "public"
@@ -533,6 +558,31 @@
       "auth": "jwt"
     },
     {
+      "method": "POST",
+      "path": "/api/v1/wallet/asset/:code/:issuer/account-flags",
+      "auth": "public"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/wallet/asset/:code/:issuer/clawback",
+      "auth": "public"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/wallet/asset/:code/:issuer/flags",
+      "auth": "public"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/wallet/asset/:code/:issuer/set-flags",
+      "auth": "public"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/wallet/asset/:code/:issuer/trustlines",
+      "auth": "public"
+    },
+    {
       "method": "GET",
       "path": "/api/v1/wallet/balances",
       "auth": "public"
@@ -566,6 +616,11 @@
       "method": "POST",
       "path": "/api/v1/webhooks/send",
       "auth": "jwt"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/webhooks/signing",
+      "auth": "public"
     },
     {
       "method": "GET",

@@ -37,7 +37,11 @@ import { CommonModule } from "./common/common.module";
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, validate: validateEnvironment }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      // Tests boot modules with mocked config, so skip startup validation there.
+      validate: process.env.NODE_ENV === "test" ? undefined : validateEnvironment,
+    }),
 ThrottlerModule.forRootAsync({
   inject: [ConfigService],
   useFactory: (config: ConfigService) => [
