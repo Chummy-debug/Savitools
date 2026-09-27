@@ -62,7 +62,7 @@ ThrottlerModule.forRootAsync({
       useFactory: (config: ConfigService) => ({
         type: "postgres",
         url: config.get<string>("DATABASE_URL"),
-        autoLoadEntities: true,
+        entities: ALL_ENTITIES,
         synchronize: config.get<string>("NODE_ENV") !== "production",
         migrations: [
           CreateLedgerMonitor1752926400000,

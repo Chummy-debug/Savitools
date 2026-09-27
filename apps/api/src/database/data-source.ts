@@ -24,6 +24,12 @@ import { CreatePasskeys1786200000000 } from './migrations/1786200000000-create-p
 import { AddSecretEncryptionVersioning1786300000000 } from './migrations/1786300000000-add-secret-encryption-versioning';
 import { WorkspaceDefaultUniqueIndex1786400000000 } from './migrations/1786400000000-workspace-default-unique-index';
 
+/**
+ * CLI data source used by `migration:run` / `migration:revert`.
+ *
+ * Entity and migration lists come from the canonical registry that the NestJS
+ * runtime also uses, so the two entry points can no longer drift apart.
+ */
 export default new DataSource({
   type: 'postgres',
   url: process.env.DATABASE_URL,
