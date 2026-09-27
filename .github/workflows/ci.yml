@@ -82,3 +82,28 @@ jobs:
 
       - name: Build Docker image
         run: docker build -t savitools-api:latest -f apps/api/Dockerfile .
+
+  docker-compose-config:
+    name: Docker Compose Config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Provide the values Compose interpolates. DEPLOYER_SECRET_KEY is a
+      # throwaway testnet key: the api container is never started here, the
+      # value only has to satisfy the ${DEPLOYER_SECRET_KEY:?} guard.
+      - name: Create .env for Compose
+        run: |
+          cp .env.example .env
+          echo "DEPLOYER_SECRET_KEY=SDJNQ4TZWJ4RJZ6F3ZWQ4TZWJ4RJZ6F3ZWQ4TZWJ4RJZ6F3ZWQ4TZ" >> .env
+
+      - name: Validate both compose files
+        run: make config
+
+      # Smoke run: the infrastructure services must actually reach a healthy
+      # state, not merely parse.
+      - name: Smoke run infrastructure
+        run: |
+          docker compose -f docker-compose.yml up -d --wait
+          docker compose -f docker-compose.yml ps
+          docker compose -f docker-compose.yml down -v
