@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import {
   Account,
   Asset,
+  AuthFlag,
   BASE_FEE,
   Networks,
   Operation,
@@ -500,7 +501,10 @@ export class AssetControlService {
 
     const xdr = await this.assembleXdr(
       issuerAccount,
-      Operation.setOptions({ setFlags, clearFlags }),
+      Operation.setOptions({
+        setFlags: setFlags as AuthFlag,
+        clearFlags: clearFlags as AuthFlag,
+      }),
     );
 
     return {

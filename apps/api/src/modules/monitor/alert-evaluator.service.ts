@@ -25,7 +25,7 @@ export class AlertEvaluator {
       case 'event_topic_equals':
         return (
           event.source === 'contract' &&
-          event.payload.topic &&
+          Boolean(event.payload.topic) &&
           event.payload.topic === rule.topic
         );
       case 'failed_contract_call':
