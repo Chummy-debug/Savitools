@@ -1,7 +1,6 @@
 'use client';
 
 import { Suspense } from 'react';
-import { SiteHeader } from '@/components/layout/site-header';
 import { AssetControlTool } from '@/components/tools/asset-control-tool';
 import { ToolPageShell } from '@/components/tools/tool-page-shell';
 import { ErrorBoundary } from '@/components/tools/error-boundary';
@@ -14,7 +13,6 @@ import { ErrorBoundary } from '@/components/tools/error-boundary';
 export default function AssetControlPage() {
   return (
     <>
-      <SiteHeader />
       <ToolPageShell
         title="Asset Control"
         description="Inspect issuer authorization flags, audit trustlines, and assemble SetTrustlineFlags, Clawback and SetOptions transactions."

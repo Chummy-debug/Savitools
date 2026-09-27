@@ -1,4 +1,3 @@
-import { SiteHeader } from '@/components/layout/site-header';
 import { EcosystemStrip } from '@/components/onboarding/ecosystem-strip';
 import { QuickstartChecklist } from '@/components/onboarding/quickstart-checklist';
 import { tools } from '@/lib/tools';
@@ -9,7 +8,6 @@ import Link from 'next/link';
 export default function Home() {
   return (
     <main className="min-h-screen bg-background">
-      <SiteHeader />
 
       <div className="max-w-6xl mx-auto px-6 py-16">
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-12 mb-16">

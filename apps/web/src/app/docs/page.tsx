@@ -1,4 +1,3 @@
-import { SiteHeader } from '@/components/layout/site-header';
 import { toolDocs } from '@/lib/tool-docs';
 import { BookOpen, ArrowRight } from 'lucide-react';
 import Link from 'next/link';
@@ -12,7 +11,6 @@ export const metadata = {
 export default function DocsIndexPage() {
   return (
     <>
-      <SiteHeader />
       <main className="min-h-screen bg-background">
         <div className="max-w-6xl mx-auto px-6 py-12">
           <div className="flex items-center gap-3 mb-2">

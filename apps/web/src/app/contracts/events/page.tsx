@@ -1,4 +1,3 @@
-import { SiteHeader } from '@/components/layout/site-header';
 import { ContractEventsTool } from '@/components/tools/contract-events-tool';
 import { ToolPageShell } from '@/components/tools/tool-page-shell';
 import { ErrorBoundary } from '@/components/tools/error-boundary';
@@ -7,7 +6,6 @@ import { Suspense } from 'react';
 export default function ContractEventsPage() {
   return (
     <>
-      <SiteHeader />
       <ToolPageShell
         title="Contract Event Inspector"
         description="Query any Soroban contract's events, decoded from raw ScVal XDR into typed values — then filter them and replay them at your own webhook."
