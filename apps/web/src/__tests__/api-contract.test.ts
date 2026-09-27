@@ -1,4 +1,11 @@
 /**
+ * @jest-environment node
+ *
+ * Static analysis over the source tree plus a mocked global `fetch` — no DOM
+ * involved, so this suite runs in the Node environment.
+ */
+
+/**
  * API-to-frontend route contract (Savitura/Savitools#202).
  *
  * Two guarantees, both executable:
@@ -47,8 +54,8 @@ const API_CONTRACT_MANIFEST = join(
 const API_ORIGIN_LITERAL = /(?:https?:\/\/)?(?:localhost|127\.0\.0\.1):3001\b/g;
 const API_BASE_REFERENCE = /NEXT_PUBLIC_API_URL/g;
 const RAW_FETCH_CALL = /\bfetch\s*\(/g;
-const WRAPPER_CALL =
-  /\b(apiFetchFormData|apiFetch|downloadCsv)\s*(?:<[\s\S]{0,400}?>)?\s*\(\s*(`(?:\\[\s\S]|[^`\\])*`|'(?:\\[\s\S]|[^'\\])*'|"(?:\\[\s\S]|[^"\\])*")/g;
+const WRAPPER_CALLEE =
+  /\b(apiFetchFormData|apiFetch|downloadCsv)\s*(?:<[\s\S]{0,400}?>)?\s*\(/g;
 
 /** `${...}` interpolations that sit behind a `/` are path parameters; the rest are query suffixes. */
 const PARAM_MARKER = '\u0000';
@@ -88,6 +95,16 @@ interface WrapperCall {
   key: string;
 }
 
+interface WrapperCallSite {
+  callee: string;
+  /** Index of the callee, used for line numbers. */
+  index: number;
+  /** Index of the call's opening `(`. */
+  openIndex: number;
+  /** The argument literal, including its surrounding quotes. */
+  literal: string;
+}
+
 export function normalizeApiPath(raw: string): string {
   const withoutQuery = raw.split('?')[0];
   const marked = withoutQuery.replace(/\$\{[^}]*\}/g, PARAM_MARKER);
@@ -103,6 +120,107 @@ export function normalizeApiPath(raw: string): string {
 
 function lineOf(source: string, index: number): number {
   return source.slice(0, index).split('\n').length;
+}
+
+/** End index (exclusive) of the string/template literal starting at `start`, or -1. */
+function scanStringLiteral(source: string, start: number): number {
+  const quote = source[start];
+  let index = start + 1;
+
+  while (index < source.length) {
+    const character = source[index];
+    if (character === '\\') {
+      index += 2;
+      continue;
+    }
+    if (quote === '`' && character === '$' && source[index + 1] === '{') {
+      const close = scanInterpolation(source, index + 2);
+      if (close === -1) return -1;
+      index = close + 1;
+      continue;
+    }
+    if (character === quote) return index + 1;
+    if (character === '\n' && quote !== '`') return -1;
+    index += 1;
+  }
+
+  return -1;
+}
+
+/** Index of the `}` closing the `${` whose expression starts at `start`, or -1. */
+function scanInterpolation(source: string, start: number): number {
+  let depth = 1;
+  let index = start;
+
+  while (index < source.length) {
+    const character = source[index];
+    if (character === '\\') {
+      index += 2;
+      continue;
+    }
+    if (character === "'" || character === '"' || character === '`') {
+      const end = scanStringLiteral(source, index);
+      if (end === -1) return -1;
+      index = end;
+      continue;
+    }
+    if (character === '{') depth += 1;
+    else if (character === '}') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+    index += 1;
+  }
+
+  return -1;
+}
+
+/**
+ * Every `apiFetch`/`apiFetchFormData`/`downloadCsv` call whose first argument is
+ * a string or template literal.
+ *
+ * The argument is read with a scanner rather than a regex so that nested
+ * template literals are not truncated at the inner backtick:
+ *
+ *   apiFetch<AssetTrustlinesResult>(
+ *     `${assetPath(code, issuer, "trustlines")}${query ? `?${query}` : ""}`,
+ *   )
+ *
+ * Truncating there is what used to make the hygiene scan report that computed
+ * path as a hard-coded one.
+ */
+function findWrapperCalls(source: string): WrapperCallSite[] {
+  const calls: WrapperCallSite[] = [];
+
+  for (const match of source.matchAll(WRAPPER_CALLEE)) {
+    const openIndex = (match.index ?? 0) + match[0].length - 1;
+    let argumentStart = openIndex + 1;
+    while (/\s/.test(source[argumentStart] ?? '')) argumentStart += 1;
+
+    const quote = source[argumentStart];
+    if (quote !== "'" && quote !== '"' && quote !== '`') continue;
+
+    const end = scanStringLiteral(source, argumentStart);
+    if (end === -1) continue;
+
+    calls.push({
+      callee: match[1],
+      index: match.index ?? 0,
+      openIndex,
+      literal: source.slice(argumentStart, end),
+    });
+  }
+
+  return calls;
+}
+
+/**
+ * The literal is an interpolated path (`` `${assetPath(...)}` ``). It is
+ * assembled at runtime, so it cannot be compared against a route and is not a
+ * hygiene violation either.
+ */
+function isComputedPath(literal: string): boolean {
+  return literal.slice(1).startsWith('${');
 }
 
 function listSourceFiles(): SourceFile[] {
@@ -157,24 +275,25 @@ function scanSourceFile(file: SourceFile): Violation[] {
     }
   }
 
-  for (const match of file.source.matchAll(WRAPPER_CALL)) {
-    const literal = match[2];
-    const raw = literal.slice(1, -1);
+  for (const call of findWrapperCalls(file.source)) {
+    if (isComputedPath(call.literal)) continue;
+
+    const raw = call.literal.slice(1, -1);
     if (!raw.startsWith('/')) {
       violations.push({
         file: file.path,
-        line: lineOf(file.source, match.index ?? 0),
+        line: lineOf(file.source, call.index),
         rule: 'wrapper-path-shape',
-        detail: `${match[1]}("${raw}") must start with "/" so the helper applies the /v1 prefix`,
+        detail: `${call.callee}("${raw}") must start with "/" so the helper applies the /v1 prefix`,
       });
       continue;
     }
     if (/^\/api(\/|$)/.test(raw) || /^\/v1(\/|$)/.test(raw)) {
       violations.push({
         file: file.path,
-        line: lineOf(file.source, match.index ?? 0),
+        line: lineOf(file.source, call.index),
         rule: 'wrapper-path-shape',
-        detail: `${match[1]}("${raw}") already carries an api/v1 prefix — pass the path relative to /v1`,
+        detail: `${call.callee}("${raw}") already carries an api/v1 prefix — pass the path relative to /v1`,
       });
     }
   }
@@ -194,21 +313,24 @@ function formatViolations(violations: Violation[]): string {
 /** Index of the `)` that closes the call whose `(` is at `openIndex`. */
 function findCallEnd(source: string, openIndex: number): number {
   let depth = 0;
-  let quote: string | null = null;
-  for (let index = openIndex; index < source.length; index += 1) {
+  let index = openIndex;
+
+  while (index < source.length) {
     const character = source[index];
-    if (quote) {
-      if (character === '\\') index += 1;
-      else if (character === quote) quote = null;
+    if (character === "'" || character === '"' || character === '`') {
+      const end = scanStringLiteral(source, index);
+      if (end === -1) return source.length;
+      index = end;
       continue;
     }
-    if (character === "'" || character === '"' || character === '`') quote = character;
-    else if (character === '(') depth += 1;
+    if (character === '(') depth += 1;
     else if (character === ')') {
       depth -= 1;
       if (depth === 0) return index;
     }
+    index += 1;
   }
+
   return source.length;
 }
 
@@ -222,18 +344,22 @@ function requestMethodOf(callee: string, callText: string): string {
 function collectWrapperCalls(files: SourceFile[]): WrapperCall[] {
   const calls: WrapperCall[] = [];
   for (const file of files) {
-    for (const match of file.source.matchAll(WRAPPER_CALL)) {
-      const literal = match[2];
-      const literalStart = (match.index ?? 0) + match[0].length - literal.length;
-      const openIndex = file.source.lastIndexOf('(', literalStart);
-      const callText = file.source.slice(openIndex, findCallEnd(file.source, openIndex) + 1);
+    for (const call of findWrapperCalls(file.source)) {
+      if (isComputedPath(call.literal)) continue;
+
+      const callText = file.source.slice(
+        call.openIndex,
+        findCallEnd(file.source, call.openIndex) + 1,
+      );
+      const method = requestMethodOf(call.callee, callText);
+
       calls.push({
         file: file.path,
-        line: lineOf(file.source, match.index ?? 0),
-        callee: match[1],
-        literal,
-        method: requestMethodOf(match[1], callText),
-        key: `${requestMethodOf(match[1], callText)} /api/v1${normalizeApiPath(literal.slice(1, -1))}`,
+        line: lineOf(file.source, call.index),
+        callee: call.callee,
+        literal: call.literal,
+        method,
+        key: `${method} /api/v1${normalizeApiPath(call.literal.slice(1, -1))}`,
       });
     }
   }
@@ -377,7 +503,9 @@ describe('API route hygiene', () => {
     });
 
     expect(violations.map((violation) => violation.rule)).toEqual(['raw-api-fetch']);
-    expect(violations[0].detail).toContain('benchmark-panel.tsx');
+    // The offending file is reported structurally; the detail carries the line.
+    expect(violations[0].file).toBe('components/tools/composer/benchmark-panel.tsx');
+    expect(violations[0].detail).toContain('fetch(');
     expect(violations[0].detail).toContain('/composer/benchmark');
   });
 

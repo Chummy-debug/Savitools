@@ -1,3 +1,9 @@
+/**
+ * @jest-environment node
+ *
+ * Builds its own minimal `window`/`localStorage` double, which would clash with
+ * jsdom's real implementations.
+ */
 // Test fuzzy search utility
 import { fuzzyScore, fuzzyFilter } from '../lib/fuzzy-search';
 
