@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { MONITOR_ROLES } from '../modules/monitor/monitor-runtime.config';
 
 /**
  * Startup environment validation (Savitura/Savitools#197).
@@ -39,6 +40,18 @@ function isLoopbackOrigin(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Splits a comma-separated origin list (Savitura/Savitools#255). Unlike
+ * `parseWebOrigins` there is no default: an unset value means "nothing to
+ * validate" rather than "validate localhost".
+ */
+function splitOrigins(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0);
 }
 
 /** Runtime-read variables and their exact purposes — keep in sync with the
@@ -106,12 +119,30 @@ export function collectConfigurationErrors(
 
   // ─── Production HTTPS ─────────────────────────────────────────────────────
   if (isProduction) {
-    for (const key of ['WEB_ORIGIN', 'STELLAR_HORIZON_URL', 'STELLAR_RPC_URL'] as const) {
+    for (const key of ['STELLAR_HORIZON_URL', 'STELLAR_RPC_URL'] as const) {
       const value = get(key);
       if (value && isHttpUrl(value) && !isLoopbackOrigin(value)) {
         errors.push(`${key} must use HTTPS in production`);
       }
     }
+    // WEB_ORIGIN may list several origins; every public one must be HTTPS.
+    for (const origin of splitOrigins(get('WEB_ORIGIN'))) {
+      if (isHttpUrl(origin) && !isLoopbackOrigin(origin)) {
+        errors.push('WEB_ORIGIN must use HTTPS in production');
+        break;
+      }
+    }
+  }
+
+  // ─── Monitor role ─────────────────────────────────────────────────────────
+  const monitorRole = get('MONITOR_ROLE');
+  if (
+    monitorRole &&
+    !(MONITOR_ROLES as readonly string[]).includes(monitorRole.toLowerCase())
+  ) {
+    errors.push(
+      `MONITOR_ROLE must be one of ${MONITOR_ROLES.join(', ')} (received "${monitorRole}")`,
+    );
   }
 
   // ─── Contracts module (eagerly constructed — required at startup) ─────────
