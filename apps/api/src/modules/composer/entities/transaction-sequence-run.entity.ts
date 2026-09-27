@@ -3,7 +3,7 @@ import { Column, CreateDateColumn, Entity, PrimaryColumn, UpdateDateColumn } fro
 @Entity('transaction_sequence_run')
 export class TransactionSequenceRun {
   @Column({ name: 'user_id', nullable: true })
-  userId: string;
+  userId: string | null;
   @PrimaryColumn('uuid')
   id: string;
 
@@ -17,10 +17,10 @@ export class TransactionSequenceRun {
   status: string;
 
   @Column({ type: 'jsonb' })
-  steps: any[];
+  steps: Record<string, unknown>[];
 
   @Column({ type: 'jsonb', nullable: true })
-  results: any[] | null;
+  results: Record<string, unknown>[] | null;
 
   @Column({ type: 'text', nullable: true })
   error: string | null;
