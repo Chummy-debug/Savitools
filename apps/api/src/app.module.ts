@@ -31,6 +31,7 @@ import { CreateGraphSnapshots1785600000000 } from "./database/migrations/1785600
 import { CreateNetworkSamples1785786400000 } from "./database/migrations/1785786400000-create-network-samples";
 import { AddPasswordReset1786100000000 } from "./database/migrations/1786100000000-add-password-reset";
 import { AddSecretEncryptionVersioning1786300000000 } from "./database/migrations/1786300000000-add-secret-encryption-versioning";
+import { WorkspaceDefaultUniqueIndex1786400000000 } from "./database/migrations/1786400000000-workspace-default-unique-index";
 import { validateEnvironment } from "./config/env-validation";
 import { CommonModule } from "./common/common.module";
 
@@ -68,6 +69,7 @@ ThrottlerModule.forRootAsync({
           CreateNetworkSamples1785786400000,
           AddPasswordReset1786100000000,
           AddSecretEncryptionVersioning1786300000000,
+          WorkspaceDefaultUniqueIndex1786400000000,
         ],
         migrationsRun: config.get<string>("RUN_MIGRATIONS") === "true",
         logging: config.get<string>("NODE_ENV") === "development",
