@@ -82,6 +82,28 @@ export class PreconditionsDto {
 
 export type OperationDto = Record<string, any> & { type: string };
 
+export interface PriceRatioDto {
+  n: string;
+  d: string;
+}
+
+export interface LiquidityPoolDepositDto {
+  type: 'liquidity_pool_deposit';
+  liquidityPoolId: string;
+  maxAmountA: string;
+  maxAmountB: string;
+  minPrice: PriceRatioDto;
+  maxPrice: PriceRatioDto;
+}
+
+export interface LiquidityPoolWithdrawDto {
+  type: 'liquidity_pool_withdraw';
+  liquidityPoolId: string;
+  amount: string;
+  minAmountA: string;
+  minAmountB: string;
+}
+
 export class BuildTransactionDto {
   @ApiProperty({ description: 'Stellar source account public key (G…)' })
   @IsString()

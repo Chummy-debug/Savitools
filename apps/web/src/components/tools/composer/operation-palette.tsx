@@ -6,6 +6,7 @@ import {
   ArrowRightLeft,
   BarChart2,
   Database,
+  Droplets,
   GitMerge,
   Key,
   Plus,
@@ -29,6 +30,8 @@ const OP_ICONS: Record<string, React.ElementType> = {
   path_payment_strict_send: ArrowRightLeft,
   path_payment_strict_receive: ArrowLeftRight,
   manage_data: Database,
+  liquidity_pool_deposit: Droplets,
+  liquidity_pool_withdraw: Droplets,
 };
 
 const OP_COLORS: Record<string, string> = {
@@ -44,6 +47,8 @@ const OP_COLORS: Record<string, string> = {
   path_payment_strict_send: 'from-cyan-600/20 to-cyan-600/5 border-cyan-500/30 text-cyan-400',
   path_payment_strict_receive: 'from-teal-600/20 to-teal-600/5 border-teal-500/30 text-teal-400',
   manage_data: 'from-indigo-600/20 to-indigo-600/5 border-indigo-500/30 text-indigo-400',
+  liquidity_pool_deposit: 'from-teal-600/20 to-teal-600/5 border-teal-500/30 text-teal-400',
+  liquidity_pool_withdraw: 'from-cyan-600/20 to-cyan-600/5 border-cyan-500/30 text-cyan-400',
 };
 
 interface OperationPaletteProps {

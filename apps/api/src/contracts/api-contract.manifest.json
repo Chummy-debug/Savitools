@@ -520,7 +520,7 @@
     {
       "method": "POST",
       "path": "/api/v1/transaction/graph",
-      "auth": "public"
+      "auth": "jwt"
     },
     {
       "method": "GET",

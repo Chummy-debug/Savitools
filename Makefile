@@ -8,6 +8,9 @@ dev:
 infra:
 	docker compose -f docker-compose.yml up -d
 
+# Populate network_samples, sandbox wallets, and webhook config for local dev.
+# Requires the dev stack to be running (`make dev`) and migrations to have run.
+# Safe to run multiple times — idempotent.
 seed:
 	docker compose -f docker-compose.dev.yml exec -T api sh -c "npx ts-node scripts/seed.ts"
 

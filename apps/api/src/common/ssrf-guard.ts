@@ -3,52 +3,30 @@ import { lookup as dnsLookup } from 'dns/promises';
 import { isIP } from 'net';
 
 /**
- * Shared SSRF guard for every outbound request the API makes on behalf of a
- * user (playground proxy, webhook delivery, federation, contract events,
- * notifications). Consolidated from the former duplicated copies in the
- * `playground` and `webhook` modules (Savitura/Savitools#247).
+ * The single outbound-request SSRF guard for the API.
+ *
+ * Webhooks, the playground proxy, federation, contracts and the monitor worker
+ * all resolve attacker-influenced hostnames, so they must share one
+ * implementation: two copies of a security check drift, and the drift is
+ * invisible until an address range is added to only one of them.
+ *
+ * This module used to exist twice — `modules/webhook/ssrf-guard.ts` and
+ * `modules/playground/ssrf-guard.ts` — with a verbatim copy of the private-IP
+ * logic in each. Only the exported destination check differed.
  */
 
-/** Shared redirect limit for outbound requests protected by this SSRF guard. */
+/** Shared redirect limit for outbound requests protected by this guard. */
 export const MAX_SAFE_REDIRECTS = 5;
+
 /** @deprecated Use MAX_SAFE_REDIRECTS for non-webhook outbound requests. */
 export const MAX_WEBHOOK_REDIRECTS = MAX_SAFE_REDIRECTS;
-/** @deprecated Use MAX_SAFE_REDIRECTS. Kept for the playground proxy callers. */
-export const MAX_PROXY_REDIRECTS = MAX_SAFE_REDIRECTS;
-
-/**
- * Rejects anything that isn't a same-origin relative path: absolute URLs
- * ("https://evil.com/x") and protocol-relative paths ("//evil.com/x") both
- * let `new URL(path, base)` escape the configured provider origin.
- */
-export function assertRelativePath(path: string): void {
-  if (!path.startsWith('/') || path.startsWith('//')) {
-    throw new BadRequestException('path must be a relative path beginning with a single "/"');
-  }
-
-  // A backslash is treated as "/" by some URL parsers (and by browsers),
-  // and can be used to smuggle a protocol-relative host past the check above.
-  if (path.includes('\\')) {
-    throw new BadRequestException('path must not contain backslashes');
-  }
-
-  try {
-    // If `path` parses as an absolute URL on its own (e.g. contains a scheme
-    // such as "http:", "javascript:", etc.) it is not a relative path.
-    new URL(path);
-    throw new BadRequestException('path must be a relative path, not an absolute URL');
-  } catch (error) {
-    if (error instanceof BadRequestException) {
-      throw error;
-    }
-    // Expected: URL parsing without a base fails for genuine relative paths.
-  }
-}
 
 function ipv4ToInt(ip: string): number {
-  return ip
-    .split('.')
-    .reduce((acc, octet) => (acc << 8) + Number(octet), 0) >>> 0;
+  return (
+    ip
+      .split('.')
+      .reduce((acc, octet) => (acc << 8) + Number(octet), 0) >>> 0
+  );
 }
 
 function inIpv4Range(ip: string, cidr: string): boolean {
@@ -58,7 +36,8 @@ function inIpv4Range(ip: string, cidr: string): boolean {
   return (ipv4ToInt(ip) & mask) === (ipv4ToInt(range) & mask);
 }
 
-const FORBIDDEN_IPV4_RANGES = [
+/** Every IPv4 range this guard refuses to call out to. */
+export const FORBIDDEN_IPV4_RANGES = [
   '0.0.0.0/8',
   '10.0.0.0/8',
   '100.64.0.0/10', // CGNAT
@@ -90,8 +69,9 @@ export function isForbiddenIp(ip: string): boolean {
       normalized.startsWith('fe9') ||
       normalized.startsWith('fea') ||
       normalized.startsWith('feb')
-    )
+    ) {
       return true; // link-local fe80::/10
+    }
     if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true; // unique local fc00::/7
 
     // IPv4-mapped / IPv4-compatible IPv6 addresses ("::ffff:10.0.0.1") — check
@@ -133,37 +113,67 @@ export async function assertPublicHostname(hostname: string): Promise<void> {
   }
 }
 
-/**
- * Validates that `url` targets one of `allowedOrigins` and does not resolve
- * to a private/internal address. Call this for the initial request URL and
- * again for every redirect hop before following it.
- */
-export async function assertSafeDestination(
-  url: URL,
-  allowedOrigins: readonly string[],
-): Promise<void> {
+/** Rejects a URL that is not http(s) or that resolves to a non-public address. */
+async function assertHttpDestination(url: URL): Promise<void> {
   if (url.protocol !== 'https:' && url.protocol !== 'http:') {
     throw new BadRequestException(`Unsupported protocol: ${url.protocol}`);
-  }
-
-  if (!allowedOrigins.includes(url.origin)) {
-    throw new BadRequestException(
-      `Destination origin "${url.origin}" is not an allowed provider origin`,
-    );
   }
 
   await assertPublicHostname(url.hostname);
 }
 
 /**
- * Validates that `url` is an http(s) URL that does not resolve to a
- * private/internal address. Call this for the initial webhook destination
- * and again for every redirect hop before following it.
+ * Validates a webhook destination: http(s) only, and it must not resolve to a
+ * private/internal address. Call this for the initial destination and again for
+ * every redirect hop before following it.
  */
 export async function assertSafeWebhookDestination(url: URL): Promise<void> {
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    throw new BadRequestException(`Unsupported protocol: ${url.protocol}`);
+  await assertHttpDestination(url);
+}
+
+/**
+ * Validates a playground-provider destination: http(s) only, on one of
+ * `allowedOrigins`, and it must not resolve to a private/internal address.
+ * Call this for the initial request URL and again for every redirect hop.
+ */
+export async function assertSafeDestination(
+  url: URL,
+  allowedOrigins: readonly string[],
+): Promise<void> {
+  if (!allowedOrigins.includes(url.origin)) {
+    throw new BadRequestException(
+      `Destination origin "${url.origin}" is not an allowed provider origin`,
+    );
   }
 
-  await assertPublicHostname(url.hostname);
+  await assertHttpDestination(url);
+}
+
+/**
+ * Rejects anything that isn't a same-origin relative path: absolute URLs
+ * ("https://evil.com/x") and protocol-relative paths ("//evil.com/x") both
+ * let `new URL(path, base)` escape the configured provider origin.
+ */
+export function assertRelativePath(path: string): void {
+  if (!path.startsWith('/') || path.startsWith('//')) {
+    throw new BadRequestException('path must be a relative path beginning with a single "/"');
+  }
+
+  // A backslash is treated as "/" by some URL parsers (and by browsers),
+  // and can be used to smuggle a protocol-relative host past the check above.
+  if (path.includes('\\')) {
+    throw new BadRequestException('path must not contain backslashes');
+  }
+
+  try {
+    // If `path` parses as an absolute URL on its own (e.g. contains a scheme
+    // such as "http:", "javascript:", etc.) it is not a relative path.
+    new URL(path);
+    throw new BadRequestException('path must be a relative path, not an absolute URL');
+  } catch (error) {
+    if (error instanceof BadRequestException) {
+      throw error;
+    }
+    // Expected: URL parsing without a base fails for genuine relative paths.
+  }
 }

@@ -244,9 +244,10 @@ export class NotificationWorkerService
       ruleId: alertEvent.ruleId,
       event: alertEvent.payload,
     });
-    // Same timestamped wire format as WebhookService and event replay, and the
-    // signature pair is computed once so every redirect hop carries the
-    // timestamp the signature was made for.
+    // `signatureHeaders` is the one wire contract every signed webhook path uses
+    // (WebhookService and event replay call it too), and the signature pair is
+    // computed once so every redirect hop carries the timestamp the signature
+    // was made for.
     const signedHeaders = signatureHeaders({ secret, body });
     let currentUrl = destination;
     let response: Response;

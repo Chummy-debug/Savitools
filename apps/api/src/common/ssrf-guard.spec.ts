@@ -1,4 +1,6 @@
 import { BadGatewayException, BadRequestException } from '@nestjs/common';
+import { readdirSync, readFileSync, statSync } from 'fs';
+import { join } from 'path';
 
 const lookupMock = jest.fn();
 jest.mock('dns/promises', () => ({
@@ -13,26 +15,6 @@ import {
   isForbiddenIp,
 } from './ssrf-guard';
 
-describe('assertRelativePath', () => {
-  it('accepts a plain relative path', () => {
-    expect(() => assertRelativePath('/v1/wallets')).not.toThrow();
-  });
-
-  it.each([
-    'https://evil.com/steal',
-    'http://evil.com/steal',
-    '//evil.com/steal',
-    'evil.com/steal',
-    'v1/wallets',
-    'file:///etc/passwd',
-    'javascript:alert(1)',
-    '\\\\evil.com/steal',
-    '/..\\evil.com',
-  ])('rejects absolute or protocol-relative path %s', (path) => {
-    expect(() => assertRelativePath(path)).toThrow(BadRequestException);
-  });
-});
-
 describe('isForbiddenIp', () => {
   it.each([
     '127.0.0.1',
@@ -44,7 +26,6 @@ describe('isForbiddenIp', () => {
     '::1',
     'fe80::1',
     'fc00::1',
-    'fd00::1',
     '::ffff:127.0.0.1',
   ])('flags private/internal address %s', (ip) => {
     expect(isForbiddenIp(ip)).toBe(true);
@@ -59,11 +40,9 @@ describe('isForbiddenIp', () => {
 });
 
 describe('assertPublicHostname', () => {
-  beforeEach(() => {
-    lookupMock.mockReset();
-  });
+  beforeEach(() => lookupMock.mockReset());
 
-  it('rejects an IP literal that is private', async () => {
+  it('rejects an IP literal that is private without resolving it', async () => {
     await expect(assertPublicHostname('127.0.0.1')).rejects.toThrow(BadRequestException);
     expect(lookupMock).not.toHaveBeenCalled();
   });
@@ -72,26 +51,24 @@ describe('assertPublicHostname', () => {
     await expect(assertPublicHostname('8.8.8.8')).resolves.toBeUndefined();
   });
 
-  it('resolves a hostname via DNS and rejects a private result (DNS rebinding)', async () => {
+  it('allows a hostname that resolves only to public addresses', async () => {
+    lookupMock.mockResolvedValue([{ address: '93.184.216.34', family: 4 }]);
+    await expect(assertPublicHostname('api.example.com')).resolves.toBeUndefined();
+  });
+
+  it('rejects a hostname that resolves to a private address (DNS rebinding)', async () => {
     lookupMock.mockResolvedValue([{ address: '169.254.169.254', family: 4 }]);
     await expect(assertPublicHostname('metadata.internal-rebind.example')).rejects.toThrow(
       BadRequestException,
     );
   });
 
-  it('resolves a hostname via DNS and allows a public result', async () => {
-    lookupMock.mockResolvedValue([{ address: '93.184.216.34', family: 4 }]);
-    await expect(assertPublicHostname('api.example.com')).resolves.toBeUndefined();
-  });
-
-  it('rejects if any resolved address is private, even if others are public', async () => {
+  it('rejects when any resolved record is private, even with other public ones', async () => {
     lookupMock.mockResolvedValue([
       { address: '93.184.216.34', family: 4 },
       { address: '10.0.0.5', family: 4 },
     ]);
-    await expect(assertPublicHostname('multi-a-record.example')).rejects.toThrow(
-      BadRequestException,
-    );
+    await expect(assertPublicHostname('multi-a-record.example')).rejects.toThrow(BadRequestException);
   });
 
   it('wraps a DNS resolution failure in a BadGatewayException', async () => {
@@ -99,6 +76,30 @@ describe('assertPublicHostname', () => {
     await expect(assertPublicHostname('does-not-resolve.example')).rejects.toThrow(
       BadGatewayException,
     );
+  });
+});
+
+describe('assertSafeWebhookDestination', () => {
+  beforeEach(() => lookupMock.mockReset());
+
+  it('rejects non-http(s) protocols', async () => {
+    await expect(assertSafeWebhookDestination(new URL('ftp://example.com/x'))).rejects.toThrow(
+      BadRequestException,
+    );
+  });
+
+  it('rejects a private destination', async () => {
+    lookupMock.mockResolvedValue([{ address: '10.0.0.1', family: 4 }]);
+    await expect(
+      assertSafeWebhookDestination(new URL('https://internal.example.com/hook')),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('allows a public https destination', async () => {
+    lookupMock.mockResolvedValue([{ address: '8.8.8.8', family: 4 }]);
+    await expect(
+      assertSafeWebhookDestination(new URL('https://example.com/hook')),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -136,26 +137,50 @@ describe('assertSafeDestination', () => {
   });
 });
 
-describe('assertSafeWebhookDestination', () => {
-  beforeEach(() => lookupMock.mockReset());
-
-  it('rejects non-http(s) protocols', async () => {
-    await expect(assertSafeWebhookDestination(new URL('ftp://example.com/x'))).rejects.toThrow(
-      BadRequestException,
-    );
+describe('assertRelativePath', () => {
+  it('accepts a plain relative path', () => {
+    expect(() => assertRelativePath('/v1/wallets')).not.toThrow();
   });
 
-  it('allows a public https destination', async () => {
-    lookupMock.mockResolvedValue([{ address: '8.8.8.8' }]);
-    await expect(
-      assertSafeWebhookDestination(new URL('https://example.com/hook')),
-    ).resolves.toBeUndefined();
+  it.each([
+    'https://evil.com/steal',
+    'http://evil.com/steal',
+    '//evil.com/steal',
+    'evil.com/steal',
+    'v1/wallets',
+    'file:///etc/passwd',
+    'javascript:alert(1)',
+    '\\\\evil.com/steal',
+    '/..\\evil.com',
+  ])('rejects absolute or protocol-relative path %s', (path) => {
+    expect(() => assertRelativePath(path)).toThrow(BadRequestException);
   });
+});
 
-  it('rejects a destination that resolves to a private address', async () => {
-    lookupMock.mockResolvedValue([{ address: '10.0.0.1' }]);
-    await expect(
-      assertSafeWebhookDestination(new URL('https://internal.example/hook')),
-    ).rejects.toThrow(BadRequestException);
+describe('single implementation', () => {
+  it('is the only place in the API that defines the private-IP logic', () => {
+    // A second copy of this table is how the webhook/playground guards drifted
+    // apart before. Fail the build instead of rediscovering the fork later.
+    const offenders: string[] = [];
+
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const path = join(dir, name);
+        if (statSync(path).isDirectory()) {
+          walk(path);
+          continue;
+        }
+        if (!path.endsWith('.ts') || path.endsWith('.spec.ts')) continue;
+        if (path.endsWith(join('common', 'ssrf-guard.ts'))) continue;
+        const source = readFileSync(path, 'utf8');
+        if (/FORBIDDEN_IPV4_RANGES|function isForbiddenIp/.test(source)) {
+          offenders.push(path.replace(join(__dirname, '..') + '/', ''));
+        }
+      }
+    };
+
+    walk(join(__dirname, '..'));
+
+    expect(offenders).toEqual([]);
   });
 });

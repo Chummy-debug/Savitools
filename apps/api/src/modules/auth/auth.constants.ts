@@ -16,3 +16,7 @@ export const PASSKEY_CHALLENGE_TTL_SECONDS = 120;              // 2 minutes, sin
 export const PASSKEY_REAUTH_TTL_SECONDS = 5 * 60;              // 5 minutes
 export const PASSKEY_REAUTH_SCOPE = 'passkey-reauth';
 export const PASSKEY_MAX_PER_USER = 25;
+
+// Owner a discoverable (usernameless) assertion challenge is keyed under at
+// issuance, before the server knows which credential will answer it (#287).
+export const DISCOVERABLE_CHALLENGE_OWNER = 'anonymous';
