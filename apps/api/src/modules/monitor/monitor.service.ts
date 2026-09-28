@@ -474,9 +474,13 @@ export class MonitorService implements OnApplicationBootstrap {
     dto: AlertRuleDto,
     watchType: WatchType,
   ): AlertRuleDefinition {
-    if (watchType === 'contract' && dto.type !== 'any_activity') {
+    if (
+      watchType === 'contract' &&
+      dto.type !== 'any_activity' &&
+      dto.type !== 'event_topic_equals'
+    ) {
       throw new BadRequestException(
-        'Contract watches currently support any_activity alerts',
+        'Contract watches currently support any_activity and event_topic_equals alerts',
       );
     }
     if (
@@ -492,6 +496,9 @@ export class MonitorService implements OnApplicationBootstrap {
     }
     if (dto.type === 'asset_received' && !dto.asset?.trim()) {
       throw new BadRequestException('asset_received requires an asset');
+    }
+    if (dto.type === 'event_topic_equals' && !dto.topic?.trim()) {
+      throw new BadRequestException('event_topic_equals requires a topic');
     }
     if (
       dto.type === 'transaction_count' &&
@@ -510,6 +517,7 @@ export class MonitorService implements OnApplicationBootstrap {
       type: dto.type,
       ...(dto.asset?.trim() ? { asset: dto.asset.trim() } : {}),
       ...(dto.threshold?.trim() ? { threshold: dto.threshold.trim() } : {}),
+      ...(dto.topic?.trim() ? { topic: dto.topic.trim() } : {}),
       ...(dto.type === 'transaction_count' && dto.windowMinutes
         ? { windowMinutes: dto.windowMinutes }
         : {}),
