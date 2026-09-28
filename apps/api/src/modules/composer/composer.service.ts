@@ -198,6 +198,31 @@ export const OPERATION_MANIFEST = [
       { name: 'value', label: 'Data Value (up to 64 bytes, empty to delete)', type: 'text', required: false, placeholder: 'my-value' },
     ],
   },
+  {
+    type: 'liquidity_pool_deposit',
+    label: 'Liquidity Pool Deposit',
+    description: 'Deposit both pool assets using the pool ID’s canonical Asset A/B order',
+    fields: [
+      { name: 'liquidityPoolId', label: 'Liquidity Pool ID', type: 'text', required: true, placeholder: '64-character hexadecimal pool ID' },
+      { name: 'maxAmountA', label: 'Maximum Asset A (pool order)', type: 'number', required: true, placeholder: '10' },
+      { name: 'maxAmountB', label: 'Maximum Asset B (pool order)', type: 'number', required: true, placeholder: '20' },
+      { name: 'minPrice.n', label: 'Minimum Price Numerator (B per A)', type: 'number', required: true, placeholder: '1' },
+      { name: 'minPrice.d', label: 'Minimum Price Denominator', type: 'number', required: true, placeholder: '2' },
+      { name: 'maxPrice.n', label: 'Maximum Price Numerator (B per A)', type: 'number', required: true, placeholder: '2' },
+      { name: 'maxPrice.d', label: 'Maximum Price Denominator', type: 'number', required: true, placeholder: '1' },
+    ],
+  },
+  {
+    type: 'liquidity_pool_withdraw',
+    label: 'Liquidity Pool Withdraw',
+    description: 'Withdraw pool shares for both assets using the pool ID’s canonical Asset A/B order',
+    fields: [
+      { name: 'liquidityPoolId', label: 'Liquidity Pool ID', type: 'text', required: true, placeholder: '64-character hexadecimal pool ID' },
+      { name: 'amount', label: 'Pool Share Amount', type: 'number', required: true, placeholder: '1' },
+      { name: 'minAmountA', label: 'Minimum Received Asset A (pool order)', type: 'number', required: true, placeholder: '0' },
+      { name: 'minAmountB', label: 'Minimum Received Asset B (pool order)', type: 'number', required: true, placeholder: '0' },
+    ],
+  },
 ];
 
 interface CachedSimulation {
@@ -240,6 +265,74 @@ function resolveAsset(code: string | undefined, issuer?: string): Asset {
     throw new BadRequestException(`Asset ${code} requires an issuer`);
   }
   return new Asset(code, issuer);
+}
+
+function validateLiquidityPoolId(value: unknown): string {
+  const poolId = String(value ?? '');
+  if (!/^[0-9a-fA-F]{64}$/.test(poolId)) {
+    throw new BadRequestException('liquidityPoolId must be a 64-character hexadecimal pool ID');
+  }
+  return poolId;
+}
+
+function validatePoolAmount(field: string, value: unknown, allowZero = false): string {
+  const amount = String(value ?? '');
+  if (!/^\d+(?:\.\d{1,7})?$/.test(amount)) {
+    throw new BadRequestException(`${field} must be a decimal with at most 7 fractional digits`);
+  }
+  const [whole, fraction = ''] = amount.split('.');
+  const scaled = BigInt(whole) * 10_000_000n + BigInt((fraction + '0000000').slice(0, 7));
+  if (scaled > 9223372036854775807n) {
+    throw new BadRequestException(`${field} exceeds the maximum Stellar amount`);
+  }
+  if (allowZero ? scaled < 0n : scaled === 0n) {
+    throw new BadRequestException(`${field} must be ${allowZero ? 'non-negative' : 'positive'}`);
+  }
+  return amount;
+}
+
+function validatePriceRatio(field: string, value: any): { n: number; d: number } {
+  const numerator = String(value?.n ?? '');
+  const denominator = String(value?.d ?? '');
+  if (!/^\d+$/.test(numerator) || !/^\d+$/.test(denominator)) {
+    throw new BadRequestException(`${field} numerator and denominator must be positive integers`);
+  }
+  const n = BigInt(numerator);
+  const d = BigInt(denominator);
+  if (n <= 0n || d <= 0n || n > 2147483647n || d > 2147483647n) {
+    throw new BadRequestException(`${field} numerator and denominator must be positive 32-bit integers`);
+  }
+  return { n: Number(n), d: Number(d) };
+}
+
+function validateLiquidityPoolPriceBounds(dto: any): { minPrice: { n: number; d: number }; maxPrice: { n: number; d: number } } {
+  const minPrice = validatePriceRatio('minPrice', dto.minPrice);
+  const maxPrice = validatePriceRatio('maxPrice', dto.maxPrice);
+  if (BigInt(minPrice.n) * BigInt(maxPrice.d) > BigInt(maxPrice.n) * BigInt(minPrice.d)) {
+    throw new BadRequestException('minPrice must be less than or equal to maxPrice');
+  }
+  return { minPrice, maxPrice };
+}
+
+function liquidityPoolOperationError(operation: any): string | null {
+  try {
+    if (operation.type === 'liquidityPoolDeposit') {
+      validateLiquidityPoolId(operation.liquidityPoolId);
+      validatePoolAmount('maxAmountA', operation.maxAmountA);
+      validatePoolAmount('maxAmountB', operation.maxAmountB);
+      validateLiquidityPoolPriceBounds(operation);
+    } else if (operation.type === 'liquidityPoolWithdraw') {
+      validateLiquidityPoolId(operation.liquidityPoolId);
+      validatePoolAmount('amount', operation.amount);
+      validatePoolAmount('minAmountA', operation.minAmountA, true);
+      validatePoolAmount('minAmountB', operation.minAmountB, true);
+    } else {
+      return null;
+    }
+    return null;
+  } catch (error: unknown) {
+    return error instanceof Error ? error.message : String(error);
+  }
 }
 
 @Injectable()
@@ -481,13 +574,18 @@ export class ComposerService {
       }
 
       const hash = tx.hash().toString('hex');
+      const operationResults = tx.operations.flatMap((operation, index) => {
+        const error = liquidityPoolOperationError(operation);
+        return error ? [`op[${index}] ${operation.type}: ${error}`] : [];
+      });
+      const hasOperationFailure = operationResults.length > 0;
 
       const result = {
-        success: true,
+        success: !hasOperationFailure,
         hash,
         fee: null,
-        resultCodes: null,
-        operationResults: null,
+        resultCodes: hasOperationFailure ? 'tx_failed' : null,
+        operationResults: hasOperationFailure ? operationResults : null,
         ledger: null,
       };
 
@@ -778,6 +876,24 @@ export class ComposerService {
         return Operation.manageData({
           name: dto.name,
           value: dto.value ? Buffer.from(dto.value) : null,
+        });
+      case 'liquidity_pool_deposit': {
+        const liquidityPoolId = validateLiquidityPoolId(dto.liquidityPoolId);
+        const { minPrice, maxPrice } = validateLiquidityPoolPriceBounds(dto);
+        return Operation.liquidityPoolDeposit({
+          liquidityPoolId,
+          maxAmountA: validatePoolAmount('maxAmountA', dto.maxAmountA),
+          maxAmountB: validatePoolAmount('maxAmountB', dto.maxAmountB),
+          minPrice,
+          maxPrice,
+        });
+      }
+      case 'liquidity_pool_withdraw':
+        return Operation.liquidityPoolWithdraw({
+          liquidityPoolId: validateLiquidityPoolId(dto.liquidityPoolId),
+          amount: validatePoolAmount('amount', dto.amount),
+          minAmountA: validatePoolAmount('minAmountA', dto.minAmountA, true),
+          minAmountB: validatePoolAmount('minAmountB', dto.minAmountB, true),
         });
       default:
         throw new BadRequestException(`Unknown operation type: ${(dto as any).type}`);
