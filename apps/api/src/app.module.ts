@@ -28,6 +28,7 @@ import { CreateLedgerMonitor1752926400000 } from "./database/migrations/17529264
 import { AddMonitorStateAlerts1785312000000 } from "./database/migrations/1785312000000-add-monitor-state-alerts";
 import { AddAuthEnhancements1785398400000 } from "./database/migrations/1785398400000-add-auth-enhancements";
 import { CreateGraphSnapshots1785600000000 } from "./database/migrations/1785600000000-create-graph-snapshots";
+import { DropGraphSnapshots1786500000000 } from "./database/migrations/1786500000000-drop-graph-snapshots";
 import { CreateNetworkSamples1785786400000 } from "./database/migrations/1785786400000-create-network-samples";
 import { AddPasswordReset1786100000000 } from "./database/migrations/1786100000000-add-password-reset";
 import { AddSecretEncryptionVersioning1786300000000 } from "./database/migrations/1786300000000-add-secret-encryption-versioning";
@@ -74,6 +75,7 @@ ThrottlerModule.forRootAsync({
           AddPasswordReset1786100000000,
           AddSecretEncryptionVersioning1786300000000,
           WorkspaceDefaultUniqueIndex1786400000000,
+          DropGraphSnapshots1786500000000,
         ],
         migrationsRun: config.get<string>("RUN_MIGRATIONS") === "true",
         logging: config.get<string>("NODE_ENV") === "development",

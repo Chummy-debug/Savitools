@@ -23,6 +23,7 @@ import { AddMonitorStateAlerts1785312000000 } from './migrations/1785312000000-a
 import { AddAuthEnhancements1785398400000 } from './migrations/1785398400000-add-auth-enhancements';
 import { AddRefreshTokenRotationTracking1785484800000 } from './migrations/1785484800000-add-refresh-token-rotation-tracking';
 import { CreateGraphSnapshots1785600000000 } from './migrations/1785600000000-create-graph-snapshots';
+import { DropGraphSnapshots1786500000000 } from './migrations/1786500000000-drop-graph-snapshots';
 import { CreateTransactionReplay1785700000000 } from './migrations/1785700000000-create-transaction-replay';
 import { CreateNetworkSamples1785786400000 } from './migrations/1785786400000-create-network-samples';
 import { CreateTransactionSequence1786000000000 } from './migrations/1786000000000-create-transaction-sequence';
@@ -84,4 +85,5 @@ export const ALL_MIGRATIONS: MigrationClass[] = [
   CreatePasskeys1786200000000,
   AddSecretEncryptionVersioning1786300000000,
   CreateNetworkProfiles1786400000000,
+  DropGraphSnapshots1786500000000,
 ];

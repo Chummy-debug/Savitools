@@ -1621,6 +1621,11 @@ export interface GraphResult {
   mode: GraphMode;
   nodeCount: number;
   edgeCount: number;
+  /** True when a traversal limit stopped the graph early (#260). */
+  truncated?: boolean;
+  truncatedBy?: "node_limit" | "horizon_request_limit" | null;
+  horizonRequests?: number;
+  limits?: { maxDepth: number; maxNodes: number; maxHorizonRequests: number };
 }
 
 export interface GraphQuery {

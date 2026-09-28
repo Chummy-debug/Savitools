@@ -23,6 +23,7 @@ import { CreateNetworkSamples1785786400000 } from './migrations/1785786400000-cr
 import { CreatePasskeys1786200000000 } from './migrations/1786200000000-create-passkeys';
 import { AddSecretEncryptionVersioning1786300000000 } from './migrations/1786300000000-add-secret-encryption-versioning';
 import { WorkspaceDefaultUniqueIndex1786400000000 } from './migrations/1786400000000-workspace-default-unique-index';
+import { DropGraphSnapshots1786500000000 } from './migrations/1786500000000-drop-graph-snapshots';
 
 /**
  * CLI data source used by `migration:run` / `migration:revert`.
@@ -59,6 +60,7 @@ export default new DataSource({
     CreatePasskeys1786200000000,
     AddSecretEncryptionVersioning1786300000000,
     WorkspaceDefaultUniqueIndex1786400000000,
+    DropGraphSnapshots1786500000000,
   ],
   synchronize: false,
 });
