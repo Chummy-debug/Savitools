@@ -131,6 +131,40 @@ function formatAssetString(asset: ParsedAsset): string {
   return `${asset.code}:${asset.issuer ?? ''}`;
 }
 
+/**
+ * Canonical spelling of one side of a trading pair.
+ *
+ * Accepts "XLM", "CODE:ISSUER", and the legacy literal "native" that earlier
+ * versions of `registerActivePair` wrote into the active-pair set (#285).
+ */
+function canonicalAssetString(value: string): string {
+  if (value === 'native') return 'XLM';
+  return formatAssetString(parseAssetParams(value));
+}
+
+/**
+ * Legacy spelling of one side: native as the literal "native".
+ *
+ * Only used to read history that was written under the old key shape, so a
+ * deploy does not orphan snapshots still sitting in Redis (#285).
+ */
+function legacyAssetString(value: string): string {
+  if (value === 'native') return 'native';
+  const asset = parseAssetParams(value);
+  return asset.type === 'native' ? 'native' : `${asset.code}:${asset.issuer}`;
+}
+
+/**
+ * Canonical key for a trading pair, shared by the active-pair set, the
+ * mid-price sampler and the history lookup.
+ *
+ * The sampler used to store snapshots under the literal "native|…" while
+ * `getHistory` looked up "XLM|…", so no snapshot was ever read back (#285).
+ */
+function canonicalPairKey(selling: string, buying: string): string {
+  return pairKey(canonicalAssetString(selling), canonicalAssetString(buying));
+}
+
 function formatPriceRatio(price: unknown): string {
   if (typeof price === 'string') {
     return formatFixed(parseFixed(price));
@@ -357,15 +391,15 @@ export class OrderbookService implements OnModuleInit, OnModuleDestroy {
     const redis = this.redisClient;
     if (!redis) return;
     try {
-      // Validate and canonicalize to prevent creating unbounded unique junk keys
-      const s = parseAssetParams(selling);
-      const b = parseAssetParams(buying);
-      const sStr = s.type === 'native' ? 'native' : `${s.code}:${s.issuer}`;
-      const bStr = b.type === 'native' ? 'native' : `${b.code}:${b.issuer}`;
+      // Validate to prevent creating unbounded unique junk keys, then store the
+      // canonical pair so the sampler's history keys match what getHistory
+      // looks up (#285).
+      parseAssetParams(selling);
+      parseAssetParams(buying);
 
       // Use a sorted set to track when it was last requested
       const key = `orderbook:active_pairs:${network}`;
-      await redis.zAdd(key, [{ score: Date.now(), value: pairKey(sStr, bStr) }]);
+      await redis.zAdd(key, [{ score: Date.now(), value: canonicalPairKey(selling, buying) }]);
       // Limit to max 1000 active pairs per network to prevent unbounded growth
       if (await redis.zCard(key) > 1000) {
         await redis.zRemRangeByRank(key, 0, 0); // remove the oldest
@@ -428,8 +462,22 @@ export class OrderbookService implements OnModuleInit, OnModuleDestroy {
     if (!redis) return [];
 
     try {
-      const historyKey = `orderbook:history:${network}:${pairKey(selling, buying)}`;
-      const results = await redis.lRange(historyKey, 0, HISTORY_LENGTH - 1);
+      const historyKey = `orderbook:history:${network}:${canonicalPairKey(selling, buying)}`;
+      let results = await redis.lRange(historyKey, 0, HISTORY_LENGTH - 1);
+
+      // Read-only fallback for snapshots written before the key was
+      // canonicalised: pairs sampled as "native|…" are still in Redis until the
+      // active-pair set rotates, and their history would otherwise be lost.
+      if (results.length === 0) {
+        const legacyKey = `orderbook:history:${network}:${pairKey(
+          legacyAssetString(selling),
+          legacyAssetString(buying),
+        )}`;
+        if (legacyKey !== historyKey) {
+          results = await redis.lRange(legacyKey, 0, HISTORY_LENGTH - 1);
+        }
+      }
+
       return results.map((r) => JSON.parse(r) as MidPriceSnapshot).reverse();
     } catch (err) {
       this.logger.error('Failed to read order book history', err as Error);
