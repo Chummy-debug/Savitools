@@ -5,7 +5,13 @@ jest.mock('dns/promises', () => ({
   lookup: (...args: unknown[]) => lookupMock(...args),
 }));
 
-import { assertPublicHostname, assertRelativePath, assertSafeDestination, isForbiddenIp } from './ssrf-guard';
+import {
+  assertPublicHostname,
+  assertRelativePath,
+  assertSafeDestination,
+  assertSafeWebhookDestination,
+  isForbiddenIp,
+} from './ssrf-guard';
 
 describe('assertRelativePath', () => {
   it('accepts a plain relative path', () => {
@@ -38,6 +44,7 @@ describe('isForbiddenIp', () => {
     '::1',
     'fe80::1',
     'fc00::1',
+    'fd00::1',
     '::ffff:127.0.0.1',
   ])('flags private/internal address %s', (ip) => {
     expect(isForbiddenIp(ip)).toBe(true);
@@ -82,12 +89,16 @@ describe('assertPublicHostname', () => {
       { address: '93.184.216.34', family: 4 },
       { address: '10.0.0.5', family: 4 },
     ]);
-    await expect(assertPublicHostname('multi-a-record.example')).rejects.toThrow(BadRequestException);
+    await expect(assertPublicHostname('multi-a-record.example')).rejects.toThrow(
+      BadRequestException,
+    );
   });
 
   it('wraps a DNS resolution failure in a BadGatewayException', async () => {
     lookupMock.mockRejectedValue(new Error('ENOTFOUND'));
-    await expect(assertPublicHostname('does-not-resolve.example')).rejects.toThrow(BadGatewayException);
+    await expect(assertPublicHostname('does-not-resolve.example')).rejects.toThrow(
+      BadGatewayException,
+    );
   });
 });
 
@@ -121,6 +132,30 @@ describe('assertSafeDestination', () => {
     lookupMock.mockResolvedValue([{ address: '127.0.0.1', family: 4 }]);
     await expect(
       assertSafeDestination(new URL('https://api.provider.com/v1/wallets'), allowedOrigins),
+    ).rejects.toThrow(BadRequestException);
+  });
+});
+
+describe('assertSafeWebhookDestination', () => {
+  beforeEach(() => lookupMock.mockReset());
+
+  it('rejects non-http(s) protocols', async () => {
+    await expect(assertSafeWebhookDestination(new URL('ftp://example.com/x'))).rejects.toThrow(
+      BadRequestException,
+    );
+  });
+
+  it('allows a public https destination', async () => {
+    lookupMock.mockResolvedValue([{ address: '8.8.8.8' }]);
+    await expect(
+      assertSafeWebhookDestination(new URL('https://example.com/hook')),
+    ).resolves.toBeUndefined();
+  });
+
+  it('rejects a destination that resolves to a private address', async () => {
+    lookupMock.mockResolvedValue([{ address: '10.0.0.1' }]);
+    await expect(
+      assertSafeWebhookDestination(new URL('https://internal.example/hook')),
     ).rejects.toThrow(BadRequestException);
   });
 });

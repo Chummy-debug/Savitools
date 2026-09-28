@@ -48,6 +48,19 @@ describe('environment configuration validation (Savitura/Savitools#197)', () => 
     expect(errors).toEqual([]);
   });
 
+  it('rejects a non-numeric PLAYGROUND_SPEC_TTL_MS at boot (Savitura/Savitools#247)', () => {
+    const config = { ...validBaseConfig(), PLAYGROUND_SPEC_TTL_MS: 'soon' };
+    const { errors } = collectConfigurationErrors(config);
+    expect(errors).toContain(
+      'PLAYGROUND_SPEC_TTL_MS must be a positive integer number of milliseconds',
+    );
+  });
+
+  it('accepts a positive integer PLAYGROUND_SPEC_TTL_MS', () => {
+    const config = { ...validBaseConfig(), PLAYGROUND_SPEC_TTL_MS: '2500' };
+    expect(collectConfigurationErrors(config).errors).toEqual([]);
+  });
+
   it('requires the URLs that services read at startup', () => {
     const config = validBaseConfig();
     delete config.DATABASE_URL;

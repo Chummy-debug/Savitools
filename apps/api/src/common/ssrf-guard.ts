@@ -2,7 +2,19 @@ import { BadGatewayException, BadRequestException } from '@nestjs/common';
 import { lookup as dnsLookup } from 'dns/promises';
 import { isIP } from 'net';
 
-export const MAX_PROXY_REDIRECTS = 5;
+/**
+ * Shared SSRF guard for every outbound request the API makes on behalf of a
+ * user (playground proxy, webhook delivery, federation, contract events,
+ * notifications). Consolidated from the former duplicated copies in the
+ * `playground` and `webhook` modules (Savitura/Savitools#247).
+ */
+
+/** Shared redirect limit for outbound requests protected by this SSRF guard. */
+export const MAX_SAFE_REDIRECTS = 5;
+/** @deprecated Use MAX_SAFE_REDIRECTS for non-webhook outbound requests. */
+export const MAX_WEBHOOK_REDIRECTS = MAX_SAFE_REDIRECTS;
+/** @deprecated Use MAX_SAFE_REDIRECTS. Kept for the playground proxy callers. */
+export const MAX_PROXY_REDIRECTS = MAX_SAFE_REDIRECTS;
 
 /**
  * Rejects anything that isn't a same-origin relative path: absolute URLs
@@ -72,7 +84,14 @@ export function isForbiddenIp(ip: string): boolean {
     const normalized = ip.toLowerCase();
 
     if (normalized === '::1' || normalized === '::') return true;
-    if (normalized.startsWith('fe80:') || normalized.startsWith('fe8') || normalized.startsWith('fe9') || normalized.startsWith('fea') || normalized.startsWith('feb')) return true; // link-local fe80::/10
+    if (
+      normalized.startsWith('fe80:') ||
+      normalized.startsWith('fe8') ||
+      normalized.startsWith('fe9') ||
+      normalized.startsWith('fea') ||
+      normalized.startsWith('feb')
+    )
+      return true; // link-local fe80::/10
     if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true; // unique local fc00::/7
 
     // IPv4-mapped / IPv4-compatible IPv6 addresses ("::ffff:10.0.0.1") — check
@@ -92,7 +111,7 @@ export function isForbiddenIp(ip: string): boolean {
 /**
  * Resolves `hostname` and rejects if any resolved address is private,
  * loopback, link-local, or otherwise internal. Prevents DNS rebinding to
- * internal infrastructure through an otherwise-allowlisted hostname.
+ * internal infrastructure through an otherwise-innocuous-looking hostname.
  */
 export async function assertPublicHostname(hostname: string): Promise<void> {
   if (isIP(hostname)) {
@@ -119,13 +138,31 @@ export async function assertPublicHostname(hostname: string): Promise<void> {
  * to a private/internal address. Call this for the initial request URL and
  * again for every redirect hop before following it.
  */
-export async function assertSafeDestination(url: URL, allowedOrigins: readonly string[]): Promise<void> {
+export async function assertSafeDestination(
+  url: URL,
+  allowedOrigins: readonly string[],
+): Promise<void> {
   if (url.protocol !== 'https:' && url.protocol !== 'http:') {
     throw new BadRequestException(`Unsupported protocol: ${url.protocol}`);
   }
 
   if (!allowedOrigins.includes(url.origin)) {
-    throw new BadRequestException(`Destination origin "${url.origin}" is not an allowed provider origin`);
+    throw new BadRequestException(
+      `Destination origin "${url.origin}" is not an allowed provider origin`,
+    );
+  }
+
+  await assertPublicHostname(url.hostname);
+}
+
+/**
+ * Validates that `url` is an http(s) URL that does not resolve to a
+ * private/internal address. Call this for the initial webhook destination
+ * and again for every redirect hop before following it.
+ */
+export async function assertSafeWebhookDestination(url: URL): Promise<void> {
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new BadRequestException(`Unsupported protocol: ${url.protocol}`);
   }
 
   await assertPublicHostname(url.hostname);

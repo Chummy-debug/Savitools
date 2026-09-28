@@ -50,7 +50,7 @@ describe('PlaygroundService#proxyRequest SSRF protections', () => {
   const PROVIDER_ORIGIN = 'https://api.provider.com';
 
   let service: PlaygroundService;
-  let historyRepository: { create: jest.Mock; save: jest.Mock };
+  let historyRepository: { create: jest.Mock; save: jest.Mock; createQueryBuilder: jest.Mock };
   let fetchMock: jest.Mock;
   let originalFetch: typeof fetch;
 
@@ -59,7 +59,24 @@ describe('PlaygroundService#proxyRequest SSRF protections', () => {
     lookupMock.mockResolvedValue([{ address: '93.184.216.34', family: 4 }]);
 
     const apiKeysRepository = { findOne: jest.fn().mockResolvedValue(null) };
-    historyRepository = { create: jest.fn((entry) => entry), save: jest.fn().mockResolvedValue(undefined) };
+    const historyQueryBuilder = {
+      select: jest.fn().mockReturnThis(),
+      from: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      getQuery: jest.fn().mockReturnValue('SELECT 1'),
+      delete: jest.fn().mockReturnThis(),
+      setParameter: jest.fn().mockReturnThis(),
+      execute: jest.fn().mockResolvedValue({ affected: 0 }),
+    };
+    historyRepository = {
+      create: jest.fn((entry) => entry),
+      save: jest.fn().mockResolvedValue(undefined),
+      createQueryBuilder: jest.fn(() => historyQueryBuilder),
+    };
 
     const configService = {
       get: jest.fn((key: string) => {
@@ -258,7 +275,9 @@ describe('PlaygroundService key encryption migration (Savitura/Savitools#206)', 
     };
     const historyRepository = { create: jest.fn(), save: jest.fn() };
     const configService = {
-      get: jest.fn().mockReturnValue('https://api.provider.com'),
+      get: jest.fn((key: string) =>
+        key === 'PLAYGROUND_SPEC_TTL_MS' ? undefined : 'https://api.provider.com',
+      ),
       getOrThrow: jest.fn().mockReturnValue('jwt-secret-for-legacy-decrypt'),
     };
     const authService = { resolveKey: jest.fn() };

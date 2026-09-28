@@ -12,7 +12,7 @@ import { signatureHeaders } from "../webhook/signature";
 import {
   MAX_WEBHOOK_REDIRECTS,
   assertSafeWebhookDestination,
-} from "../webhook/ssrf-guard";
+} from "../../common/ssrf-guard";
 import {
   DecodedContractEvent,
   EventFilterCriterion,

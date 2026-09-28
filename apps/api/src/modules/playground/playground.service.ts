@@ -17,7 +17,11 @@ import { ApiKey, ApiKeyProvider } from './entities/api-key.entity';
 import { PlaygroundHistory } from './entities/playground-history.entity';
 import { ProxyRequestDto } from './dto/proxy-request.dto';
 import { AuthService } from '../auth/auth.service';
-import { assertRelativePath, assertSafeDestination, MAX_PROXY_REDIRECTS } from './ssrf-guard';
+import {
+  assertRelativePath,
+  assertSafeDestination,
+  MAX_PROXY_REDIRECTS,
+} from '../../common/ssrf-guard';
 import { EncryptionService, ENCRYPTION_PURPOSES } from '../../common/encryption.service';
 
 interface CachedSpec {
@@ -46,6 +50,80 @@ const KEY_LENGTH = 32;
 const PBKDF2_ITERATIONS = 100_000;
 const SPEC_SALT = 'savitools-playground-spec-cache';
 
+/** Default playground spec cache TTL (1 hour). */
+export const DEFAULT_SPEC_TTL_MS = 3_600_000;
+/** Maximum number of history entries retained per user. */
+export const PLAYGROUND_HISTORY_LIMIT = 50;
+
+/**
+ * Parse `PLAYGROUND_SPEC_TTL_MS` into a number. Env values are strings, so a
+ * raw `get<number>()` would silently yield `NaN`. An absent value falls back to
+ * the default; anything else must be a positive integer (startup validation
+ * rejects invalid values at boot, and this throws as a defensive backstop).
+ */
+export function parseSpecTtlMs(raw: unknown): number {
+  if (raw === undefined || raw === null || raw === '') {
+    return DEFAULT_SPEC_TTL_MS;
+  }
+
+  const invalid = (): never => {
+    throw new Error(
+      `PLAYGROUND_SPEC_TTL_MS must be a positive integer number of milliseconds (received "${raw}")`,
+    );
+  };
+
+  if (typeof raw === 'number') {
+    return Number.isInteger(raw) && raw > 0 ? raw : invalid();
+  }
+
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!/^\d+$/.test(trimmed)) {
+      return invalid();
+    }
+    const parsed = Number(trimmed);
+    return parsed > 0 ? parsed : invalid();
+  }
+
+  return invalid();
+}
+
+/**
+ * Keep only the newest `keep` history rows for `userId` in a single bounded
+ * statement. Uses `DELETE ... WHERE id NOT IN (SELECT ... ORDER BY created_at
+ * DESC LIMIT keep)` instead of a full `count()`, and is correct for users with
+ * fewer than, exactly, or more than `keep` entries. Returns the number of rows
+ * deleted.
+ */
+export async function prunePlaygroundHistory(
+  repository: Repository<PlaygroundHistory>,
+  userId: string,
+  keep: number = PLAYGROUND_HISTORY_LIMIT,
+): Promise<number> {
+  // Subquery selecting the ids to keep. Built with a SELECT builder and embedded
+  // into the DELETE; the shared `:userId` parameter is registered on the delete
+  // builder below.
+  const newestIds = repository
+    .createQueryBuilder('history')
+    .select('history.id')
+    .where('history.userId = :userId', { userId })
+    .orderBy('history.createdAt', 'DESC')
+    .addOrderBy('history.id', 'DESC')
+    .limit(keep)
+    .getQuery();
+
+  const result = await repository
+    .createQueryBuilder()
+    .delete()
+    .from(PlaygroundHistory)
+    .where('user_id = :userId', { userId })
+    .andWhere(`id NOT IN (${newestIds})`)
+    .setParameter('userId', userId)
+    .execute();
+
+  return result.affected ?? 0;
+}
+
 @Injectable()
 export class PlaygroundService {
   private readonly logger = new Logger(PlaygroundService.name);
@@ -61,7 +139,7 @@ export class PlaygroundService {
     private readonly authService: AuthService,
     private readonly encryptionService: EncryptionService,
   ) {
-    this.specTtlMs = this.configService.get<number>('PLAYGROUND_SPEC_TTL_MS', 3_600_000);
+    this.specTtlMs = parseSpecTtlMs(this.configService.get('PLAYGROUND_SPEC_TTL_MS'));
   }
 
   async getSpec(provider: ApiKeyProvider): Promise<Record<string, unknown>> {
@@ -279,18 +357,10 @@ export class PlaygroundService {
       });
       await this.historyRepository.save(entry);
 
-      // Limit history to 50 items per user
-      const count = await this.historyRepository.count({ where: { userId } });
-      if (count > 50) {
-        const oldest = await this.historyRepository.find({
-          where: { userId },
-          order: { createdAt: 'ASC' },
-          take: count - 50,
-        });
-        if (oldest.length > 0) {
-          await this.historyRepository.remove(oldest);
-        }
-      }
+      // Keep only the newest PLAYGROUND_HISTORY_LIMIT entries for this user in a
+      // single bounded statement: no full-table count, and correct whether the
+      // user has fewer than, exactly, or more than the limit.
+      await prunePlaygroundHistory(this.historyRepository, userId);
     } catch (error) {
       this.logger.warn(`Failed to record playground history: ${error}`);
     }

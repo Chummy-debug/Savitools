@@ -173,6 +173,18 @@ export function collectConfigurationErrors(
     }
   }
 
+  // ─── Playground spec cache ────────────────────────────────────────────────
+  // Env values are strings; reject non-positive/non-integer values at boot so
+  // the service never caches with a NaN TTL (Savitura/Savitools#247).
+  const playgroundSpecTtl = get('PLAYGROUND_SPEC_TTL_MS');
+  if (playgroundSpecTtl !== undefined) {
+    if (!/^\d+$/.test(playgroundSpecTtl) || Number(playgroundSpecTtl) <= 0) {
+      errors.push(
+        'PLAYGROUND_SPEC_TTL_MS must be a positive integer number of milliseconds',
+      );
+    }
+  }
+
   return { errors, warnings };
 }
 
