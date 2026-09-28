@@ -277,6 +277,7 @@ npm run build      # production build
 npm run lint       # ESLint across all apps
 npm run format     # Prettier
 npm test           # run all tests
+make seed          # seed network_samples, sandbox wallets, and webhook config (requires make dev)
 ```
 
 ---
