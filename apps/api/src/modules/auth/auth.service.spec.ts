@@ -10,6 +10,7 @@ import {
 import * as argon2 from 'argon2';
 import { createHash } from 'crypto';
 import { AuthService } from './auth.service';
+import { DISCOVERABLE_CHALLENGE_OWNER } from './auth.constants';
 import { EncryptionService } from '../../common/encryption.service';
 
 function mockRepo() {
@@ -234,6 +235,55 @@ describe('AuthService', () => {
           response: { challenge: 'x' } as any,
         } as any),
       ).rejects.toThrow(/PASSKEY_REVOKED/);
+    });
+
+    it('lets a usernameless login consume the challenge it was issued (#287)', () => {
+      const rpId = 'localhost';
+      // beginPasskeyLogin without an email keys the challenge under the
+      // discoverable owner; nothing is written to challengeKeyCache.
+      (service as any).storePasskeyChallenge(
+        DISCOVERABLE_CHALLENGE_OWNER,
+        'assertion',
+        'challenge-discoverable',
+        rpId,
+      );
+
+      // The assertion names a credential owned by a real user, which is the
+      // only thing the server learns at verification time.
+      expect(() =>
+        (service as any).claimAssertionChallenge(
+          'challenge-discoverable',
+          'cred-id-1',
+          'u-passkey',
+          rpId,
+        ),
+      ).not.toThrow();
+
+      // Still single-use.
+      expect(() =>
+        (service as any).claimAssertionChallenge(
+          'challenge-discoverable',
+          'cred-id-1',
+          'u-passkey',
+          rpId,
+        ),
+      ).toThrow(/PASSKEY_CHALLENGE_INVALID/);
+    });
+
+    it('does not let the discoverable owner stand in for a user-owned challenge (#287)', () => {
+      const rpId = 'localhost';
+      (service as any).storePasskeyChallenge('u-passkey', 'assertion', 'challenge-user', rpId);
+
+      // Another user's credential holds no challenge of its own, and the
+      // fallback reaches only the discoverable owner — so this must fail.
+      expect(() =>
+        (service as any).claimAssertionChallenge('challenge-user', 'cred-id-2', 'u-other', rpId),
+      ).toThrow(/PASSKEY_CHALLENGE_INVALID/);
+
+      // The user the challenge was issued for can still consume it.
+      expect(() =>
+        (service as any).claimAssertionChallenge('challenge-user', 'cred-id-1', 'u-passkey', rpId),
+      ).not.toThrow();
     });
 
     it('rejects an assertion whose challenge was already consumed', async () => {
