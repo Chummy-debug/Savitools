@@ -19,10 +19,13 @@ async function bootstrap() {
     new FastifyAdapter({ logger: true }),
   );
 
-  await app.register(cookie);
-  await app.register(multipart, { limits: { fileSize: 2 * 1024 * 1024 } });
-
   const config = app.get(ConfigService);
+  const maxWasmFileSize = Number(config.get<string>('MAX_WASM_FILE_SIZE') ?? '5242880');
+  const resolvedMaxWasmFileSize = Number.isFinite(maxWasmFileSize) && maxWasmFileSize > 0 ? maxWasmFileSize : 5 * 1024 * 1024;
+
+  await app.register(cookie);
+  await app.register(multipart, { limits: { fileSize: resolvedMaxWasmFileSize } });
+
   const port = config.get<number>('API_PORT', 3001);
   const prefix = config.get<string>('API_PREFIX', 'api');
   // One allow-list for HTTP CORS, Socket.IO CORS and the gateway check.

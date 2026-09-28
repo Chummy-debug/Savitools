@@ -13,7 +13,8 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { execFileSync } from 'child_process';
+import { execFile } from 'child_process';
+import { Queue, QueueEvents, Worker } from 'bullmq';
 import { assertPublicHostname } from '../../common/ssrf-guard';
 import { AbiCatalogEntry, buildAbiCatalog, encodeAbiArgument } from './abi-catalog';
 import { AttachAbiDto, ABI_MAX_BYTES } from './dto/attach-abi.dto';
@@ -33,6 +34,7 @@ import {
 } from "@stellar/stellar-sdk";
 
 export const GIT_CLONE_TIMEOUT_MS = 30_000;
+export const CONTRACTS_GIT_IMPORT_QUEUE = 'contracts-git-import';
 export const WASM_URL_MAX_REDIRECTS = 5;
 export const WASM_URL_CACHE_TTL_MS = 10 * 60 * 1000;
 export const WASM_URL_CACHE_MAX_ENTRIES = 100;
@@ -47,6 +49,22 @@ export interface WasmMetadata {
   sha256: string;
   uploadedAt: string;
   source: 'file' | 'git' | 'url';
+}
+
+interface GitImportJobData {
+  repoUrl: string;
+  artifactPath: string;
+}
+
+function parseRedisConnection(redisUrl: string): { host: string; port: number; username?: string; password?: string; tls?: Record<string, never> } {
+  const parsed = new URL(redisUrl);
+  return {
+    host: parsed.hostname,
+    port: Number(parsed.port || 6379),
+    username: parsed.username || undefined,
+    password: parsed.password || undefined,
+    tls: parsed.protocol === 'rediss:' ? {} : undefined,
+  };
 }
 
 /** Attached-ABI catalog bounds — mirrors the wizard session TTL pattern. */
@@ -64,6 +82,10 @@ export class ContractsService {
   private readonly wasmStore = new Map<string, { buffer: Buffer; metadata: WasmMetadata }>();
   private readonly wasmUrlCache = new Map<string, { contentHash: string; cachedAt: number }>();
   private readonly maxFileSize: number;
+  private readonly gitCloneTimeoutMs: number;
+  private readonly gitImportQueue?: Queue<GitImportJobData>;
+  private readonly gitImportQueueEvents?: QueueEvents;
+  private readonly gitImportWorker?: Worker<GitImportJobData, Buffer>;
   private readonly abiCatalogs = new Map<string, { entry: AbiCatalogEntry; expiresAt: number }>();
 
   constructor(
@@ -108,7 +130,37 @@ export class ContractsService {
         : Networks.TESTNET);
 
     const configuredLimit = this.configService.get<string>('MAX_WASM_FILE_SIZE');
-    this.maxFileSize = configuredLimit ? parseInt(configuredLimit, 10) : 5 * 1024 * 1024; // default 5MB
+    this.maxFileSize = configuredLimit ? parseInt(configuredLimit, 10) || 5 * 1024 * 1024 : 5 * 1024 * 1024;
+
+    const configuredGitTimeoutMs = this.configService.get<string>('GIT_CLONE_TIMEOUT_MS');
+    this.gitCloneTimeoutMs = configuredGitTimeoutMs ? parseInt(configuredGitTimeoutMs, 10) || GIT_CLONE_TIMEOUT_MS : GIT_CLONE_TIMEOUT_MS;
+
+    const redisUrl = this.configService.get<string>('REDIS_URL');
+    if (redisUrl) {
+      const connection = parseRedisConnection(redisUrl);
+      this.gitImportQueue = new Queue<GitImportJobData>(CONTRACTS_GIT_IMPORT_QUEUE, {
+        connection,
+        defaultJobOptions: {
+          removeOnComplete: true,
+          removeOnFail: 1000,
+          attempts: 1,
+        },
+      });
+      this.gitImportQueueEvents = new QueueEvents(CONTRACTS_GIT_IMPORT_QUEUE, { connection });
+      this.gitImportWorker = new Worker<GitImportJobData, Buffer>(CONTRACTS_GIT_IMPORT_QUEUE, async (job) => {
+        return this.fetchWasmFromGitDirect(job.data.repoUrl, job.data.artifactPath);
+      }, { connection });
+      this.gitImportQueue.on('error', (error) => {
+        this.logger.warn(`Git import queue error: ${error.message}`);
+      });
+      this.gitImportWorker.on('error', (error) => {
+        this.logger.warn(`Git import worker error: ${error.message}`);
+      });
+    }
+  }
+
+  getMaxWasmFileSize(): number {
+    return this.maxFileSize;
   }
 
   async storeUploadedWasm(params: {
@@ -269,46 +321,56 @@ export class ContractsService {
     return resolved;
   }
 
-  async fetchWasmFromGit(gitRepoUrl: string, artifactPath: string): Promise<Buffer> {
+  private async execGitCommand(args: string[], cwd: string): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      execFile('git', args, { cwd, timeout: this.gitCloneTimeoutMs, stdio: 'ignore' }, (error) => {
+        if (error) {
+          if (error.message.includes('ENOENT')) {
+            reject(new BadRequestException('Git is not installed in this environment; Git-based WASM import is unavailable'));
+            return;
+          }
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+
+  private async fetchWasmFromGitDirect(gitRepoUrl: string, artifactPath: string): Promise<Buffer> {
     const repoUrl = await this.assertSafeGitRepoUrl(gitRepoUrl);
     const normalizedArtifactPath = this.assertArtifactPathInsideCheckout(artifactPath);
 
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'savitools-git-'));
     try {
       this.logger.log(`Cloning read-only Git repo ${repoUrl} into ${tempDir}...`);
-      // Argument-array invocation: no shell, so command metacharacters in the
-      // attacker-controlled URL or artifact path are never interpreted.
-      execFileSync('git', ['clone', '--depth', '1', '--no-checkout', repoUrl, '.'], {
-        cwd: tempDir,
-        timeout: GIT_CLONE_TIMEOUT_MS,
-        stdio: 'ignore',
-      });
-      execFileSync('git', ['sparse-checkout', 'init', '--cone'], {
-        cwd: tempDir,
-        timeout: GIT_CLONE_TIMEOUT_MS,
-        stdio: 'ignore',
-      });
-      execFileSync('git', ['sparse-checkout', 'set', normalizedArtifactPath], {
-        cwd: tempDir,
-        timeout: GIT_CLONE_TIMEOUT_MS,
-        stdio: 'ignore',
-      });
-      execFileSync('git', ['checkout'], {
-        cwd: tempDir,
-        timeout: GIT_CLONE_TIMEOUT_MS,
-        stdio: 'ignore',
-      });
+      await this.execGitCommand(['clone', '--depth', '1', '--no-checkout', repoUrl, '.'], tempDir);
+      await this.execGitCommand(['sparse-checkout', 'init', '--cone'], tempDir);
+      await this.execGitCommand(['sparse-checkout', 'set', normalizedArtifactPath], tempDir);
+      await this.execGitCommand(['checkout'], tempDir);
 
       const fullArtifactPath = this.resolveArtifactInsideCheckout(tempDir, normalizedArtifactPath);
       return fs.readFileSync(fullArtifactPath);
     } catch (err: any) {
       if (err instanceof NotFoundException || err instanceof BadRequestException) throw err;
+      if (err?.code === 'ENOENT') {
+        throw new BadRequestException('Git is not installed in this environment; Git-based WASM import is unavailable');
+      }
       throw new BadRequestException(`Failed to fetch WASM from Git repository: ${err.message}`);
     } finally {
       try {
         fs.rmSync(tempDir, { recursive: true, force: true });
       } catch {}
     }
+  }
+
+  async fetchWasmFromGit(gitRepoUrl: string, artifactPath: string): Promise<Buffer> {
+    if (this.gitImportQueue && this.gitImportQueueEvents) {
+      const job = await this.gitImportQueue.add('fetch', { repoUrl: gitRepoUrl, artifactPath });
+      return job.waitUntilFinished(this.gitImportQueueEvents);
+    }
+
+    return this.fetchWasmFromGitDirect(gitRepoUrl, artifactPath);
   }
 
   async fetchWasmFromUrl(url: string): Promise<{ buffer: Buffer; metadata: WasmMetadata }> {
@@ -498,8 +560,8 @@ export class ContractsService {
     if (!wasmBuffer || wasmBuffer.length === 0) {
       throw new BadRequestException('WASM file is empty');
     }
-    if (wasmBuffer.length > 1024 * 1024) {
-      throw new BadRequestException('WASM file exceeds maximum size of 1MB');
+    if (wasmBuffer.length > this.maxFileSize) {
+      throw new BadRequestException(`WASM file exceeds maximum size of ${this.maxFileSize / (1024 * 1024)}MB`);
     }
 
     // Check init auth / format basic validation (WASM magic header)
@@ -743,8 +805,8 @@ export class ContractsService {
       throw new ForbiddenException('Contract invocations are not permitted (allowlist not configured)');
     }
 
-    const contractsList = allowedContractsRaw.split(',').map((c) => c.trim()).filter(Boolean);
-    const functionsList = allowedFunctionsRaw.split(',').map((f) => f.trim()).filter(Boolean);
+    const contractsList = this.parseAllowlist('CONTRACT_INVOKE_ALLOWED_CONTRACTS');
+    const functionsList = this.parseAllowlist('CONTRACT_INVOKE_ALLOWED_FUNCTIONS');
 
     if (!contractsList.includes(contractId) || !functionsList.includes(functionName)) {
       throw new ForbiddenException('Contract or function is not allowlisted for invocation');

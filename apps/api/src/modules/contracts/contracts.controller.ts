@@ -109,8 +109,9 @@ export class ContractsController {
       if (wasmBuffer.length === 0) {
         throw new BadRequestException('WASM file is empty');
       }
-      if (wasmBuffer.length > 1024 * 1024) {
-        throw new BadRequestException('WASM file exceeds 1MB limit');
+      const maxWasmBytes = this.contractsService.getMaxWasmFileSize();
+      if (wasmBuffer.length > maxWasmBytes) {
+        throw new BadRequestException(`WASM file exceeds maximum size of ${maxWasmBytes / (1024 * 1024)}MB`);
       }
 
       // Validate WASM magic header and init auth check
