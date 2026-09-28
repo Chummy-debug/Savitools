@@ -32,6 +32,7 @@ import { IsNull, Repository } from 'typeorm';
 import { EncryptionService, ENCRYPTION_PURPOSES } from '../../common/encryption.service';
 import {
   ACCESS_TOKEN_TTL_SECONDS,
+  DISCOVERABLE_CHALLENGE_OWNER,
   EMAIL_VERIFICATION_TTL_SECONDS,
   PASSKEY_CHALLENGE_TTL_SECONDS,
   PASSKEY_MAX_PER_USER,
@@ -915,12 +916,14 @@ export class AuthService {
       userVerification: 'preferred',
     });
 
-    // Assertion challenges are stored under a stable owner hash of the
-    // allowed credential ids (or 'anonymous' for discoverable flows) and
-    // constrained to those credentials at verification time.
+    // Assertion challenges are stored under a stable owner hash of the allowed
+    // credential ids, and constrained to those credentials at verification
+    // time. Discoverable (usernameless) assertions are issued before the server
+    // knows which credential will answer, so they are keyed under
+    // DISCOVERABLE_CHALLENGE_OWNER instead (#287).
     const challengeOwner = allowCredentials
       ? this.userIdForChallenge(allowCredentials)
-      : 'anonymous';
+      : DISCOVERABLE_CHALLENGE_OWNER;
     this.storePasskeyChallenge(
       challengeOwner,
       'assertion',
@@ -960,9 +963,16 @@ export class AuthService {
       return;
     }
 
-    // Discoverable credential: challenges are keyed per user when issued
-    // via beginPasskeyLogin without allowCredentials.
-    this.takePasskeyChallenge(credentialUserId, challenge, 'assertion', rpId);
+    // Discoverable credential: the challenge was issued without an allow-list,
+    // so it was keyed under DISCOVERABLE_CHALLENGE_OWNER rather than under the
+    // user this assertion names. Prefer the owner that actually holds it, so a
+    // usernameless login can consume its own challenge (#287) — the key is
+    // still consumed exactly once and still checked for type and rpId.
+    const owner = this.passkeyChallenges.has(`${credentialUserId}:${challenge}`)
+      ? credentialUserId
+      : DISCOVERABLE_CHALLENGE_OWNER;
+
+    this.takePasskeyChallenge(owner, challenge, 'assertion', rpId);
   }
 
   /** Verify an assertion and issue the same session as password login. */

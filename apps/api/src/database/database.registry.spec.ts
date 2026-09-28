@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-var-requires */
-import { readdirSync, statSync } from 'fs';
+import { readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { ALL_ENTITIES, ALL_MIGRATIONS } from './database.registry';
 import dataSource from './data-source';
@@ -59,5 +59,24 @@ describe('database registry', () => {
   it('is the exact list the CLI data source consumes', () => {
     expect(dataSource.options.entities).toEqual(ALL_ENTITIES);
     expect(dataSource.options.migrations).toEqual(ALL_MIGRATIONS);
+  });
+
+  it('keeps both entry points on the registry instead of re-declaring the lists', () => {
+    // The runtime (app.module.ts) and the CLI (data-source.ts) are the two
+    // places a schema can silently diverge from. Both must import the registry
+    // rather than carry their own array, which is how the drift started.
+    const entryPoints = [
+      readFileSync(join(__dirname, '..', 'app.module.ts'), 'utf8'),
+      readFileSync(join(__dirname, 'data-source.ts'), 'utf8'),
+    ];
+
+    for (const source of entryPoints) {
+      expect(source).toMatch(/from ['"]\.{1,2}\/(database\/)?database\.registry['"]/);
+      expect(source).toMatch(/ALL_MIGRATIONS/);
+      expect(source).toMatch(/ALL_ENTITIES/);
+      // No inline `migrations: [ ... ]` / `entities: [ ... ]` literal.
+      expect(source).not.toMatch(/migrations:\s*\[/);
+      expect(source).not.toMatch(/entities:\s*\[/);
+    }
   });
 });

@@ -23,7 +23,6 @@ import { AddMonitorStateAlerts1785312000000 } from './migrations/1785312000000-a
 import { AddAuthEnhancements1785398400000 } from './migrations/1785398400000-add-auth-enhancements';
 import { AddRefreshTokenRotationTracking1785484800000 } from './migrations/1785484800000-add-refresh-token-rotation-tracking';
 import { CreateGraphSnapshots1785600000000 } from './migrations/1785600000000-create-graph-snapshots';
-import { DropGraphSnapshots1786500000000 } from './migrations/1786500000000-drop-graph-snapshots';
 import { CreateTransactionReplay1785700000000 } from './migrations/1785700000000-create-transaction-replay';
 import { CreateNetworkSamples1785786400000 } from './migrations/1785786400000-create-network-samples';
 import { CreateTransactionSequence1786000000000 } from './migrations/1786000000000-create-transaction-sequence';
@@ -31,6 +30,8 @@ import { AddPasswordReset1786100000000 } from './migrations/1786100000000-add-pa
 import { CreatePasskeys1786200000000 } from './migrations/1786200000000-create-passkeys';
 import { AddSecretEncryptionVersioning1786300000000 } from './migrations/1786300000000-add-secret-encryption-versioning';
 import { CreateNetworkProfiles1786400000000 } from './migrations/1786400000000-create-network-profiles';
+import { WorkspaceDefaultUniqueIndex1786400000000 } from './migrations/1786400000000-workspace-default-unique-index';
+import { DropGraphSnapshots1786500000000 } from './migrations/1786500000000-drop-graph-snapshots';
 
 /** A TypeORM migration constructor as passed to `DataSourceOptions.migrations`. */
 export type MigrationClass = new () => MigrationInterface;
@@ -85,5 +86,9 @@ export const ALL_MIGRATIONS: MigrationClass[] = [
   CreatePasskeys1786200000000,
   AddSecretEncryptionVersioning1786300000000,
   CreateNetworkProfiles1786400000000,
+  // Same timestamp as CreateNetworkProfiles; ordered by file name, which is how
+  // the migrations directory reads. It ran on the runtime path before this list
+  // was the only source, so dropping it would leave the CLI behind the schema.
+  WorkspaceDefaultUniqueIndex1786400000000,
   DropGraphSnapshots1786500000000,
 ];

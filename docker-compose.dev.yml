@@ -90,6 +90,12 @@ services:
       - path: apps/api/.env
         required: false
     command: sh -c "npm install --no-audit --no-fund --prefer-offline && npm run dev -w @savitools/api"
+    # The API releases the monitor leader lease on SIGTERM (see
+    # enableGracefulShutdown in apps/api/src/main.ts). Docker's default 10 s
+    # grace period is shorter than MONITOR_LEADER_LEASE_MS (30 s by default), so
+    # a stop would SIGKILL the process mid-release and the next replica would
+    # wait out the full lease before taking over.
+    stop_grace_period: 45s
     depends_on:
       postgres:
         condition: service_healthy

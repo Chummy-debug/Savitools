@@ -122,7 +122,7 @@ describe('OrderbookService', () => {
         'orderbook:active_pairs:testnet',
         [
           expect.objectContaining({
-            value: expect.stringContaining('native|USDC'),
+            value: expect.stringContaining('XLM|USDC'),
           }),
         ],
       );
@@ -204,6 +204,75 @@ describe('OrderbookService', () => {
       (service as any).redisClient = undefined;
       const result = await service.getHistory('XLM', 'USDC:ISSUER', 'testnet');
       expect(result).toEqual([]);
+    });
+
+    // ── #285: the sampler's key and this lookup must agree ───────────────────
+
+    it('looks up history under the canonical key for either native spelling', async () => {
+      (service as any).redisClient = mockRedisClient;
+      mockRedisClient.lRange.mockReset();
+      const entries = [JSON.stringify({ timestamp: 1, midPrice: '0.10' })];
+      mockRedisClient.lRange.mockResolvedValue(entries);
+
+      await service.getHistory('XLM', 'USDC:ISSUER', 'testnet');
+      expect(mockRedisClient.lRange).toHaveBeenCalledTimes(1);
+      expect(mockRedisClient.lRange).toHaveBeenNthCalledWith(
+        1,
+        'orderbook:history:testnet:XLM|USDC:ISSUER',
+        0,
+        expect.any(Number),
+      );
+
+      // The spelling earlier versions wrote into the active-pair set resolves to
+      // the same key, so both land on one read.
+      mockRedisClient.lRange.mockClear();
+      await service.getHistory('native', 'USDC:ISSUER', 'testnet');
+      expect(mockRedisClient.lRange).toHaveBeenCalledTimes(1);
+      expect(mockRedisClient.lRange).toHaveBeenNthCalledWith(
+        1,
+        'orderbook:history:testnet:XLM|USDC:ISSUER',
+        0,
+        expect.any(Number),
+      );
+    });
+
+    it('registers the polled pair under the canonical key the sampler uses', async () => {
+      (service as any).redisClient = mockRedisClient;
+      mockRedisClient.zAdd.mockResolvedValue(undefined);
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => horizonOrderBookResponse(),
+      });
+
+      await service.getOrderbook('XLM', `USDC:${COUNTER_ACCOUNT}`, 'testnet');
+
+      expect(mockRedisClient.zAdd).toHaveBeenCalledWith('orderbook:active_pairs:testnet', [
+        { score: expect.any(Number), value: `XLM|USDC:${COUNTER_ACCOUNT}` },
+      ]);
+    });
+
+    it('still serves history written under the legacy native|… key', async () => {
+      (service as any).redisClient = mockRedisClient;
+      mockRedisClient.lRange.mockReset();
+      mockRedisClient.lRange
+        .mockResolvedValueOnce([])
+        .mockResolvedValue([JSON.stringify({ timestamp: 1, midPrice: '0.09' })]);
+
+      const result = await service.getHistory('XLM', 'USDC:ISSUER', 'testnet');
+
+      expect(mockRedisClient.lRange).toHaveBeenNthCalledWith(
+        1,
+        'orderbook:history:testnet:XLM|USDC:ISSUER',
+        0,
+        expect.any(Number),
+      );
+      expect(mockRedisClient.lRange).toHaveBeenNthCalledWith(
+        2,
+        'orderbook:history:testnet:native|USDC:ISSUER',
+        0,
+        expect.any(Number),
+      );
+      expect(result).toEqual([{ timestamp: 1, midPrice: '0.09' }]);
     });
   });
 
