@@ -14,7 +14,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { execFileSync } from 'child_process';
-import { assertPublicHostname } from '../webhook/ssrf-guard';
+import { assertPublicHostname } from '../../common/ssrf-guard';
 import { AbiCatalogEntry, buildAbiCatalog, encodeAbiArgument } from './abi-catalog';
 import { AttachAbiDto, ABI_MAX_BYTES } from './dto/attach-abi.dto';
 import {
