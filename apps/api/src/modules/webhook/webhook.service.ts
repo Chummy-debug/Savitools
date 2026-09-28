@@ -2,7 +2,7 @@ import { BadGatewayException, BadRequestException, Injectable, Logger, NotFoundE
 import { ConfigService } from '@nestjs/config';
 import { SendWebhookDto } from './dto/send-webhook.dto';
 import { WEBHOOK_TEMPLATES, WebhookTemplate } from './webhook-templates';
-import { assertSafeWebhookDestination, MAX_WEBHOOK_REDIRECTS } from './ssrf-guard';
+import { assertSafeWebhookDestination, MAX_WEBHOOK_REDIRECTS } from '../../common/ssrf-guard';
 import {
   LEGACY_ISO_TIMESTAMP_HEADER,
   LEGACY_SIGNATURE_HEADER,

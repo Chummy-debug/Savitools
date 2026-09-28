@@ -17,7 +17,7 @@ import { ApiKey, ApiKeyProvider } from './entities/api-key.entity';
 import { PlaygroundHistory } from './entities/playground-history.entity';
 import { ProxyRequestDto } from './dto/proxy-request.dto';
 import { AuthService } from '../auth/auth.service';
-import { assertRelativePath, assertSafeDestination, MAX_PROXY_REDIRECTS } from './ssrf-guard';
+import { assertRelativePath, assertSafeDestination, MAX_SAFE_REDIRECTS } from '../../common/ssrf-guard';
 import { EncryptionService, ENCRYPTION_PURPOSES } from '../../common/encryption.service';
 
 interface CachedSpec {
@@ -193,7 +193,7 @@ export class PlaygroundService {
 
       let hops = 0;
       while ([301, 302, 303, 307, 308].includes(response.status) && response.headers.has('location')) {
-        if (++hops > MAX_PROXY_REDIRECTS) {
+        if (++hops > MAX_SAFE_REDIRECTS) {
           throw new BadGatewayException(`Too many redirects from ${dto.provider}`);
         }
 

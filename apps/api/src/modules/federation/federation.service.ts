@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as smolToml from 'smol-toml';
-import { assertPublicHostname, MAX_SAFE_REDIRECTS } from '../webhook/ssrf-guard';
+import { assertPublicHostname, MAX_SAFE_REDIRECTS } from '../../common/ssrf-guard';
 
 const FETCH_TIMEOUT = 15_000;
 export const DEFAULT_FEDERATION_PROBE_TIMEOUT_MS = 3_000;

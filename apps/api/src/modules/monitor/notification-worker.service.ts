@@ -8,7 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Job, Worker } from 'bullmq';
 import { signatureHeaders } from '../webhook/signature';
-import { assertSafeWebhookDestination, MAX_WEBHOOK_REDIRECTS } from '../webhook/ssrf-guard';
+import { assertSafeWebhookDestination, MAX_WEBHOOK_REDIRECTS } from '../../common/ssrf-guard';
 import { Resend } from 'resend';
 import { Repository } from 'typeorm';
 import { User } from '../auth/entities/user.entity';
