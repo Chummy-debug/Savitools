@@ -239,9 +239,10 @@ export class EventsService {
   /**
    * Replays events at a user-supplied endpoint, one signed POST per event.
    *
-   * Deliberately does not go through WebhookService: that writes every send
-   * into a 50-entry Redis history, so a 200-event replay would evict the
-   * user's entire webhook history. Follows notification-worker's precedent of
+   * Deliberately does not go through WebhookService: that records every send
+   * in its in-memory per-user history, capped at MAX_HISTORY_PER_USER (50)
+   * entries, so a 200-event replay would evict the user's entire webhook
+   * history. Follows notification-worker's precedent of
    * importing the SSRF guard directly and running its own send loop.
    */
   async replayEvents(dto: ReplayEventsDto): Promise<ReplaySummary> {
