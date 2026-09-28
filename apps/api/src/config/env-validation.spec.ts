@@ -4,6 +4,10 @@ import {
   collectConfigurationErrors,
   validateEnvironment,
 } from './env-validation';
+import {
+  resolveStellarHorizonUrl,
+  resolveStellarRpcUrl,
+} from './stellar-endpoints';
 
 /** Minimal KEY=VALUE parser mirroring dotenv's basic semantics. */
 function parseEnvFile(content: string): Record<string, string> {
@@ -209,6 +213,38 @@ describe('environment configuration validation (Savitura/Savitools#197)', () => 
     delete config.DEPLOYER_SECRET_KEY;
 
     expect(() => validateEnvironment(config)).toThrow(/JWT_SECRET is required/);
+  });
+
+  it('resolves the same public Horizon/RPC URLs across the shared config contract', () => {
+    const config = {
+      STELLAR_HORIZON_URL: 'https://horizon-testnet.stellar.org',
+      STELLAR_RPC_URL: 'https://soroban-rpc-testnet.stellar.org',
+      STELLAR_HORIZON_PUBLIC_URL: 'https://horizon.example.com',
+      STELLAR_RPC_PUBLIC_URL: 'https://rpc.example.com',
+    } as Record<string, string>;
+
+    expect(resolveStellarHorizonUrl(config, 'public')).toBe('https://horizon.example.com');
+    expect(resolveStellarHorizonUrl(config, 'testnet')).toBe(
+      'https://horizon-testnet.stellar.org',
+    );
+    expect(resolveStellarRpcUrl(config, 'public')).toBe('https://rpc.example.com');
+    expect(resolveStellarRpcUrl(config, 'testnet')).toBe(
+      'https://soroban-rpc-testnet.stellar.org',
+    );
+
+    const legacyConfig = {
+      STELLAR_HORIZON_MAINNET_URL: 'https://legacy-horizon.example.com',
+      STELLAR_RPC_PUBLIC_URL: 'https://legacy-rpc.example.com',
+      STELLAR_HORIZON_URL: 'https://horizon-testnet.stellar.org',
+      STELLAR_RPC_URL: 'https://soroban-rpc-testnet.stellar.org',
+    } as Record<string, string>;
+
+    expect(resolveStellarHorizonUrl(legacyConfig, 'public')).toBe(
+      'https://legacy-horizon.example.com',
+    );
+    expect(resolveStellarRpcUrl(legacyConfig, 'public')).toBe(
+      'https://legacy-rpc.example.com',
+    );
   });
 
   it('the documented .env.example templates validate cleanly', () => {
