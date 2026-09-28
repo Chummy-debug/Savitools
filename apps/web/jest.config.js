@@ -1,40 +1,31 @@
-/**
- * Jest configuration for @savitools/web.
- *
- * The app is a Next.js React front end, so tests need a DOM (`jsdom`) and the
- * transformer has to handle JSX. Coverage is collected from `src` and gated by
- * a floor that `npm run test:coverage -w apps/web` enforces.
- */
-module.exports = {
-  preset: 'ts-jest',
-  testEnvironment: 'jsdom',
+const transform = {
+  '^.+\\.(ts|tsx)$': [
+    'ts-jest',
+    {
+      tsconfig: {
+        jsx: 'react-jsx',
+        module: 'commonjs',
+        moduleResolution: 'node',
+        esModuleInterop: true,
+        allowJs: true,
+      },
+    },
+  ],
+};
+
+const shared = {
+  rootDir: __dirname,
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
   },
-  transform: {
-    '^.+\\.(ts|tsx)$': [
-      'ts-jest',
-      {
-        tsconfig: {
-          jsx: 'react-jsx',
-          module: 'commonjs',
-          moduleResolution: 'node',
-          esModuleInterop: true,
-          allowJs: true,
-        },
-      },
-    ],
-  },
+  transform,
+};
+
+module.exports = {
   // `.tsx` matters: every React component and route page test is JSX. Both
   // suffixes are collected because the repo already carries `.test.ts` and
   // `.spec.ts(x)` files — anything else silently never runs.
-  testMatch: ['<rootDir>/src/__tests__/**/*.{test,spec}.{ts,tsx}'],
-  setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
-  collectCoverageFrom: [
-    'src/**/*.{ts,tsx}',
-    '!src/**/*.d.ts',
-    '!src/**/__tests__/**',
-  ],
+  collectCoverageFrom: ['src/**/*.{ts,tsx}', '!src/**/*.d.ts', '!src/**/__tests__/**'],
   coverageDirectory: '<rootDir>/coverage',
   coverageReporters: ['text', 'text-summary', 'lcov', 'json-summary'],
   // A ratchet floor, not a target: it is pinned just under the coverage this
@@ -48,4 +39,21 @@ module.exports = {
       statements: 7,
     },
   },
+  projects: [
+    {
+      // Pure logic suites: fuzzy search, recent items, preferences, contracts.
+      ...shared,
+      displayName: 'node',
+      testEnvironment: 'node',
+      testMatch: ['<rootDir>/src/__tests__/**/*.{test,spec}.ts'],
+    },
+    {
+      // Component suites: anything that needs to mount React into a DOM.
+      ...shared,
+      displayName: 'dom',
+      testEnvironment: 'jsdom',
+      setupFilesAfterEnv: ['<rootDir>/jest.setup.dom.ts'],
+      testMatch: ['<rootDir>/src/__tests__/**/*.{test,spec}.tsx'],
+    },
+  ],
 };

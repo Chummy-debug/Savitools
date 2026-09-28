@@ -1,4 +1,4 @@
-import { ComposerTool } from '@/components/tools/other-tools';
+import { ComposerTool } from '@/components/tools/composer';
 import { ToolPageShell } from '@/components/tools/tool-page-shell';
 import { ErrorBoundary } from '@/components/tools/error-boundary';
 import { Suspense } from 'react';

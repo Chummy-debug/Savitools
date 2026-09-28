@@ -231,18 +231,22 @@ export class MonitorService implements OnApplicationBootstrap {
   }
 
   /**
-   * Search watch events across the current user's watches with the same
-   * filters used by the CSV export endpoint (see Savitura/Savitools#147).
+   * Query builder shared by the search page and the CSV export: same filters,
+   * and a deterministic ordering.
+   *
+   * The export walks rows with OFFSET pagination, so ordering only by
+   * `occurred_at` left rows with equal timestamps in an undefined order — a
+   * concurrent insert or a different plan silently duplicated some rows and
+   * dropped others from the CSV. `id` is the tiebreaker that makes page
+   * boundaries stable (see Savitura/Savitools#147 / #288).
    */
-  async searchEvents(
-    userId: string,
-    query: SearchEventsQueryDto,
-  ): Promise<{ items: WatchEvent[]; page: number; limit: number; total: number }> {
+  private buildEventsQuery(userId: string, query: SearchEventsQueryDto) {
     const qb = this.watchEventRepository
       .createQueryBuilder('event')
       .innerJoin('event.watch', 'watch')
       .where('watch.user_id = :userId', { userId })
-      .orderBy('event.occurred_at', 'DESC');
+      .orderBy('event.occurred_at', 'DESC')
+      .addOrderBy('event.id', 'DESC');
 
     if (query.watchId) {
       qb.andWhere('event.watch_id = :watchId', { watchId: query.watchId });
@@ -263,7 +267,34 @@ export class MonitorService implements OnApplicationBootstrap {
       );
     }
 
-    const [items, total] = await qb
+    return qb;
+  }
+
+  /**
+   * One page of events without the aggregate COUNT.
+   *
+   * The CSV export used to call `searchEvents` per chunk, so it re-ran a COUNT
+   * over the user's entire event history once per chunk (Savitura/Savitools#288).
+   */
+  private async findEventPage(
+    userId: string,
+    query: SearchEventsQueryDto,
+  ): Promise<WatchEvent[]> {
+    return this.buildEventsQuery(userId, query)
+      .skip((query.page - 1) * query.limit)
+      .take(query.limit)
+      .getMany();
+  }
+
+  /**
+   * Search watch events across the current user's watches with the same
+   * filters used by the CSV export endpoint (see Savitura/Savitools#147).
+   */
+  async searchEvents(
+    userId: string,
+    query: SearchEventsQueryDto,
+  ): Promise<{ items: WatchEvent[]; page: number; limit: number; total: number }> {
+    const [items, total] = await this.buildEventsQuery(userId, query)
       .skip((query.page - 1) * query.limit)
       .take(query.limit)
       .getManyAndCount();
@@ -300,7 +331,7 @@ export class MonitorService implements OnApplicationBootstrap {
         page,
         limit: take,
       };
-      const { items } = await this.searchEvents(userId, pageQuery);
+      const items = await this.findEventPage(userId, pageQuery);
       if (items.length === 0) break;
 
       for (const event of items) {

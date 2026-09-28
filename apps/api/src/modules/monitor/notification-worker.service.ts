@@ -8,7 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Job, Worker } from 'bullmq';
 import { signatureHeaders } from '../webhook/signature';
-import { assertSafeWebhookDestination, MAX_WEBHOOK_REDIRECTS } from '../webhook/ssrf-guard';
+import { assertSafeWebhookDestination, MAX_WEBHOOK_REDIRECTS } from '../../common/ssrf-guard';
 import { Resend } from 'resend';
 import { Repository } from 'typeorm';
 import { User } from '../auth/entities/user.entity';
@@ -244,9 +244,10 @@ export class NotificationWorkerService
       ruleId: alertEvent.ruleId,
       event: alertEvent.payload,
     });
-    // Same timestamped wire format as WebhookService and event replay, and the
-    // signature pair is computed once so every redirect hop carries the
-    // timestamp the signature was made for.
+    // `signatureHeaders` is the one wire contract every signed webhook path uses
+    // (WebhookService and event replay call it too), and the signature pair is
+    // computed once so every redirect hop carries the timestamp the signature
+    // was made for.
     const signedHeaders = signatureHeaders({ secret, body });
     let currentUrl = destination;
     let response: Response;

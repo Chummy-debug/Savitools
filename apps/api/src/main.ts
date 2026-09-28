@@ -9,6 +9,7 @@ import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
 import { AppModule } from "./app.module";
+import { enableGracefulShutdown } from "./config/graceful-shutdown";
 import { parseWebOrigins } from "./config/web-origins";
 import { WebSocketCorsAdapter } from "./config/websocket-cors.adapter";
 
@@ -84,6 +85,12 @@ async function bootstrap() {
     const document = SwaggerModule.createDocument(app, swaggerConfig);
     SwaggerModule.setup(`${prefix}/docs`, app, document);
   }
+
+  // Nest only registers its SIGTERM/SIGINT listeners when this is called, and
+  // without it none of the OnModuleDestroy/OnApplicationShutdown hooks run on
+  // container stop. Must happen before listen() so the handlers exist for the
+  // whole lifetime of the process.
+  enableGracefulShutdown(app);
 
   await app.listen(port, "0.0.0.0");
   console.log(`SaviTools API running on http://localhost:${port}/${prefix}`);
